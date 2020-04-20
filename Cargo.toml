@@ -1,0 +1,13 @@
+[package]
+name = "scd"
+version = "0.1.0"
+authors = ["Chen Shuaimin <chen_shuaimin@outlook.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tui = "0.9.1"
+termion = "1.5.5"
+notify = "5.0.0-pre.2"
+nix = "0.17.0"

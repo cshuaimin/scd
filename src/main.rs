@@ -19,6 +19,7 @@ enum Event {
     Key(Key),
     FileSystemNotify,
     FishWorkingDirChanged(String),
+    FishExited,
 }
 
 struct FileView {
@@ -293,6 +294,7 @@ fn main() {
 
         match rx.recv().unwrap() {
             Event::Key(Key::Char('q')) => break,
+            Event::FishExited => break,
             event => file_view_state.handle_event(event),
         }
     }

@@ -6,7 +6,7 @@ function sync-cwd-to-fish --on-signal SIGUSR1
     commandline -f repaint
 end
 
-function sync-cwd-to-sidebar --on-variable PWD
+function sync-cwd-to-scd --on-variable PWD
     echo "cd $PWD" > $RECV_FIFO
 end
 
@@ -15,4 +15,4 @@ function unregister --on-event fish_exit
 end
 
 echo $fish_pid > $RECV_FIFO
-sync-cwd-to-sidebar 
+sync-cwd-to-scd 

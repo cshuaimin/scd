@@ -33,16 +33,16 @@ impl Fish {
                     let mut recv_fifo = File::open(RECV_FIFO).unwrap();
                     let mut buf = String::new();
                     recv_fifo.read_to_string(&mut buf).unwrap();
-                    let buf = buf.trim();
-                    if buf == "fish_exit" {
-                        fish.pid.store(0, Ordering::Release);
-                    } else if buf.starts_with("cd ") {
-                        tx.send(Event::FishWorkingDirChanged(buf[3..].to_string()))
-                            .unwrap();
-                    } else {
-                        dbg!(&buf);
-                        let pid = buf.parse::<i32>().unwrap();
-                        fish.pid.store(pid, Ordering::Release);
+                    for cmd in buf.trim().split('\n') {
+                        if cmd == "fish_exit" {
+                            tx.send(Event::FishExited).unwrap();
+                        } else if cmd.starts_with("cd ") {
+                            tx.send(Event::FishWorkingDirChanged(cmd[3..].to_string()))
+                                .unwrap();
+                        } else {
+                            let pid = cmd.parse::<i32>().unwrap();
+                            fish.pid.store(pid, Ordering::Release);
+                        }
                     }
                 }
             }

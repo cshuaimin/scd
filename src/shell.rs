@@ -1,6 +1,6 @@
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::thread;
 
@@ -10,20 +10,27 @@ use nix::sys::stat::Mode;
 use nix::unistd::{mkfifo, Pid};
 use serde::{Deserialize, Serialize};
 
-const RECV_FIFO: &str = "/tmp/scd-recv-fifo";
-const SEND_FILE: &str = "/tmp/scd-send";
+pub const RECV_FIFO: &str = "/tmp/scd-recv-fifo";
+pub const SEND_FILE: &str = "/tmp/scd-send";
 
 /// Events emited from the shell.
 #[derive(Serialize, Deserialize)]
 pub enum ShellEvent {
-    /// Shell started.
-    Start(i32),
+    /// Shell PID.
+    Pid(i32),
 
     /// The shell's current directory was changed.
     ChangeDirectory(PathBuf),
 
     /// Shell exited.
     Exit,
+}
+
+impl ShellEvent {
+    pub fn emit(&self) {
+        let buf = serde_json::to_vec(self).unwrap();
+        fs::write(RECV_FIFO, buf).unwrap();
+    }
 }
 
 pub struct Shell {
@@ -43,22 +50,14 @@ impl Shell {
         let _ = mkfifo(RECV_FIFO, Mode::S_IRWXU);
 
         loop {
-            let mut recv_fifo = File::open(RECV_FIFO).unwrap();
-            let mut buf = Vec::new();
-            recv_fifo.read_to_end(&mut buf).unwrap();
-            let event = toml::from_slice(&buf).unwrap();
+            let buf = fs::read_to_string(RECV_FIFO).unwrap();
+            let event = serde_json::from_str(&buf).unwrap();
             tx.send(event).unwrap();
         }
     }
 
     pub fn set_pid(&mut self, pid: i32) {
         self.pid.store(pid, Ordering::Release);
-    }
-
-    pub fn emit(event: ShellEvent) {
-        let mut recv_fifo = File::open(RECV_FIFO).unwrap();
-        let buf = toml::to_vec(&event).unwrap();
-        recv_fifo.write_all(&buf).unwrap();
     }
 
     pub fn run(&self, cmd: &str) {
@@ -76,4 +75,28 @@ impl Shell {
         send_file.write_all(cmd.as_bytes()).unwrap();
         kill(Pid::from_raw(pid), Signal::SIGUSR1).unwrap();
     }
+
+    pub fn cd(&self, dir: &Path) {
+        self.run(&format!(
+            "cd '{}' && commandline -f repaint",
+            dir.to_str().unwrap()
+        ));
+    }
 }
+
+pub const FISH_INIT: &str = r#"
+function __eval_cmd --on-signal SIGUSR1
+    eval (scd get-cmd)
+end
+
+function __scd_cd --on-variable PWD
+    scd cd "$PWD"
+end
+
+function __scd_exit --on-event fish_exit
+    scd exit
+end
+
+scd send-pid $fish_pid
+__scd_cd
+"#;

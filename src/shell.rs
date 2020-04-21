@@ -28,6 +28,7 @@ pub enum ShellEvent {
 
 impl ShellEvent {
     pub fn emit(&self) {
+        let _ = mkfifo(RECV_FIFO, Mode::S_IRWXU);
         let buf = serde_json::to_vec(self).unwrap();
         fs::write(RECV_FIFO, buf).unwrap();
     }

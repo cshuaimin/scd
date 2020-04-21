@@ -11,8 +11,8 @@ use nix::unistd::{mkfifo, Pid};
 
 use super::Event;
 
-const RECV_FIFO: &str = "/tmp/terminal-sidebar-recv-fifo";
-const SEND_FILE: &str = "/tmp/terminal-sidebar-send";
+const RECV_FIFO: &str = "/tmp/scd-recv-fifo";
+const SEND_FILE: &str = "/tmp/scd-send";
 
 pub(crate) struct Fish {
     pid: AtomicI32,
@@ -57,6 +57,7 @@ impl Fish {
             let mut send_file = OpenOptions::new()
                 .write(true)
                 .truncate(true)
+                .create(true)
                 .open(SEND_FILE)
                 .unwrap();
             let cwd = cwd.to_str().unwrap().as_bytes();

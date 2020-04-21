@@ -22,5 +22,4 @@ if test ! -p $RECV_FIFO
 end
 
 echo $fish_pid > $RECV_FIFO
-
 sync-cwd-to-scd 

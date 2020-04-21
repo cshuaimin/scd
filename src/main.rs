@@ -4,47 +4,42 @@ use std::io;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::mpsc::{sync_channel, SyncSender};
-use std::sync::Arc;
 use std::thread;
 
-use fish::Fish;
+use crossbeam_channel::{bounded, select, Receiver};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use termion::{event::Key, input::TermRead, raw::IntoRawMode};
-use tui::{backend::TermionBackend, layout::*, style::*, widgets::*, Terminal};
+use tui::{
+    backend::{Backend, TermionBackend},
+    layout::*,
+    style::*,
+    widgets::*,
+    Terminal,
+};
 
-mod fish;
+use shell::*;
 
-enum Event {
-    Key(Key),
-    FileSystemNotify,
-    FishWorkingDirChanged(String),
-    FishExited,
+mod shell;
+
+struct FileInfo {
+    path: PathBuf,
+    name: String,
+    file_type: FileType,
+}
+
+#[derive(PartialEq)]
+enum FileType {
+    Directory,
+    Executable,
+    Symlink,
+    Fifo,
+    Socket,
+    CharDevice,
+    BlockDevice,
+    Other,
 }
 
 struct FileView {
-    theme: Theme,
-}
-
-impl Default for FileView {
-    fn default() -> Self {
-        Self {
-            theme: Theme::default(),
-        }
-    }
-}
-
-impl StatefulWidget for FileView {
-    type State = FileViewState;
-
-    fn render(self, area: Rect, buf: &mut tui::buffer::Buffer, state: &mut Self::State) {
-        let items = state.files.iter().map(|file| self.theme.apply(file));
-        let list = List::new(items).highlight_style(self.theme.highlight_style);
-        StatefulWidget::render(list, area, buf, &mut state.list_state);
-    }
-}
-
-struct Theme {
     directory: (Style, Option<char>),
     executable: (Style, Option<char>),
     symlink: (Style, Option<char>),
@@ -56,14 +51,14 @@ struct Theme {
     highlight_style: Style,
 }
 
-impl Default for Theme {
+impl Default for FileView {
     fn default() -> Self {
-        let base = Style::default().fg(Color::White);
+        let base = Style::default();
         Self {
             directory: (base.fg(Color::LightBlue), Some('/')),
             executable: (base.fg(Color::LightCyan), Some('*')),
             symlink: (base, None),
-            fifo: (base, None),
+            fifo: (base, Some('|')),
             socket: (base, None),
             char_device: (base, None),
             block_device: (base, None),
@@ -73,7 +68,7 @@ impl Default for Theme {
     }
 }
 
-impl Theme {
+impl FileView {
     fn apply(&self, file: &FileInfo) -> Text {
         let (style, postfix) = match file.file_type {
             FileType::Directory => self.directory,
@@ -93,22 +88,14 @@ impl Theme {
     }
 }
 
-#[derive(PartialEq)]
-enum FileType {
-    Directory,
-    Executable,
-    Symlink,
-    Fifo,
-    Socket,
-    CharDevice,
-    BlockDevice,
-    Other,
-}
+impl StatefulWidget for FileView {
+    type State = FileViewState;
 
-struct FileInfo {
-    path: PathBuf,
-    name: String,
-    file_type: FileType,
+    fn render(self, area: Rect, buf: &mut tui::buffer::Buffer, state: &mut Self::State) {
+        let items = state.files.iter().map(|file| self.apply(file));
+        let list = List::new(items).highlight_style(self.highlight_style);
+        StatefulWidget::render(list, area, buf, &mut state.list_state);
+    }
 }
 
 struct FileViewState {
@@ -116,29 +103,16 @@ struct FileViewState {
     files: Vec<FileInfo>,
     list_state: ListState,
     show_hidden_files: bool,
-    watcher: RecommendedWatcher,
-    fish: Arc<Fish>,
 }
 
 impl FileViewState {
-    fn new(dir: impl Into<PathBuf>, tx: SyncSender<Event>) -> FileViewState {
-        let watcher = RecommendedWatcher::new_immediate({
-            let tx = tx.clone();
-            move |_| {
-                tx.send(Event::FileSystemNotify).unwrap();
-            }
-        })
-        .unwrap();
-        let mut file_view = FileViewState {
+    fn new() -> FileViewState {
+        FileViewState {
             dir: PathBuf::new(),
             files: vec![],
             list_state: ListState::default(),
             show_hidden_files: false,
-            watcher,
-            fish: Fish::new(tx),
-        };
-        file_view.enter_directory(dir.into().canonicalize().unwrap());
-        file_view
+        }
     }
 
     fn read_dir(&mut self) {
@@ -192,16 +166,8 @@ impl FileViewState {
         self.files = files;
     }
 
-    fn enter_directory(&mut self, dir: PathBuf) {
-        if self.dir != PathBuf::new() {
-            self.watcher.unwatch(&self.dir).unwrap();
-        }
-        self.dir = dir;
-        self.read_dir();
-        self.watcher
-            .watch(&self.dir, RecursiveMode::NonRecursive)
-            .unwrap();
-        self.select_first();
+    fn selected(&self) -> Option<&FileInfo> {
+        self.list_state.selected().map(|index| &self.files[index])
     }
 
     fn select_first(&mut self) {
@@ -233,36 +199,130 @@ impl FileViewState {
         };
         self.list_state.select(Some(index));
     }
+}
 
-    fn handle_event(&mut self, event: Event) {
-        match event {
-            Event::Key(Key::Char('j')) | Event::Key(Key::Down) => self.select_next(),
-            Event::Key(Key::Char('k')) | Event::Key(Key::Up) => self.select_prev(),
-            Event::Key(Key::Char('g')) | Event::Key(Key::Home) => self.select_first(),
-            Event::Key(Key::Char('G')) | Event::Key(Key::End) => self.select_last(),
-            Event::Key(Key::Char('l')) | Event::Key(Key::Char('\n')) => {
-                if let Some(index) = self.list_state.selected() {
-                    self.enter_directory(self.files[index].path.to_owned());
-                    self.fish.send_cwd(&self.dir);
+struct App {
+    watcher: RecommendedWatcher,
+    file_view_state: FileViewState,
+    shell: Shell,
+
+    watch_rx: Receiver<notify::Event>,
+    key_rx: Receiver<Key>,
+    shell_rx: Receiver<ShellEvent>,
+}
+
+impl App {
+    fn new(dir: impl Into<PathBuf>) -> Self {
+        let (watch_tx, watch_rx) = bounded(0);
+        let watcher =
+            RecommendedWatcher::new_immediate(move |res: notify::Result<notify::Event>| {
+                watch_tx.send(res.unwrap()).unwrap();
+            })
+            .unwrap();
+
+        let (key_tx, key_rx) = bounded(0);
+        thread::spawn(move || {
+            let keys = io::stdin().keys();
+            for key in keys {
+                key_tx.send(key.unwrap()).unwrap();
+            }
+        });
+
+        let (shell_tx, shell_rx) = bounded(0);
+        let shell = Shell::new(shell_tx);
+        let file_view_state = FileViewState::new();
+
+        let mut app = Self {
+            watcher,
+            file_view_state,
+
+            shell,
+            watch_rx,
+            key_rx,
+            shell_rx,
+        };
+        app.enter_directory(dir.into().canonicalize().unwrap());
+
+        app
+    }
+
+    fn enter_directory(&mut self, dir: PathBuf) {
+        if self.file_view_state.dir != PathBuf::new() {
+            self.watcher.unwatch(&self.file_view_state.dir).unwrap();
+        }
+        self.file_view_state.dir = dir;
+        self.file_view_state.read_dir();
+        if self.file_view_state.files.len() > 0 {
+            self.file_view_state.list_state.select(Some(0));
+        }
+        self.watcher
+            .watch(&self.file_view_state.dir, RecursiveMode::NonRecursive)
+            .unwrap();
+        self.shell.run(&format!(
+            "cd '{}'",
+            self.file_view_state.dir.to_str().unwrap()
+        ));
+    }
+
+    fn draw<B: Backend>(&mut self, terminal: &mut Terminal<B>) {
+        terminal
+            .draw(|mut frame| {
+                let file_view = FileView::default();
+                frame.render_stateful_widget(file_view, frame.size(), &mut self.file_view_state);
+            })
+            .unwrap();
+    }
+
+    fn handle_event(&mut self) {
+        select! {
+            recv(self.watch_rx) -> _watch => self.file_view_state.read_dir(),
+            recv(self.shell_rx) -> shell_event => {
+                match shell_event.unwrap() {
+                    ShellEvent::Start(pid) => self.shell.set_pid(pid),
+                    ShellEvent::ChangeDirectory(dir) => self.enter_directory(dir),
+                    ShellEvent::Exit => std::process::exit(1),
                 }
             }
-            Event::Key(Key::Char('h')) | Event::Key(Key::Esc) => {
-                if let Some(parent) = self.dir.parent() {
-                    let parent = parent.to_owned();
-                    let current_dir_name =
-                        self.dir.file_name().unwrap().to_str().unwrap().to_owned();
-                    self.enter_directory(parent);
-                    let index = self
-                        .files
-                        .iter()
-                        .position(|file| file.name == current_dir_name);
-                    self.list_state.select(index);
-                    self.fish.send_cwd(&self.dir);
+            recv(self.key_rx) -> key => {
+                match key.unwrap() {
+                    Key::Char('j') | Key::Down => self.file_view_state.select_next(),
+                    Key::Char('k') | Key::Up => self.file_view_state.select_prev(),
+                    Key::Char('g') | Key::Home => self.file_view_state.select_first(),
+                    Key::Char('G') | Key::End => self.file_view_state.select_last(),
+                    Key::Char('l') | Key::Char('\n') => {
+                        if let Some(selected) = self.file_view_state.selected() {
+                            let dir = selected.path.clone();
+                            self.enter_directory(dir);
+                        }
+                    }
+                    Key::Char('h') | Key::Esc => {
+                        if let Some(parent) = self.file_view_state.dir.parent() {
+                            let parent = parent.to_owned();
+                            let current_dir_name = self
+                                .file_view_state
+                                .dir
+                                .file_name()
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_owned();
+                            self.enter_directory(parent);
+                            let index = self
+                                .file_view_state
+                                .files
+                                .iter()
+                                .position(|file| file.name == current_dir_name);
+                            self.file_view_state.list_state.select(index);
+                            self.shell.run(&format!(
+                                "cd '{}'",
+                                self.file_view_state.dir.to_str().unwrap()
+                            ));
+                        }
+                    }
+                    Key::Char('q') => std::process::exit(0),
+                    _ => {}
                 }
             }
-            Event::FileSystemNotify => self.read_dir(),
-            Event::FishWorkingDirChanged(cwd) => self.enter_directory(cwd.into()),
-            _ => {}
         }
     }
 }
@@ -273,29 +333,12 @@ fn main() {
         let backend = TermionBackend::new(stdout);
         Terminal::new(backend).unwrap()
     };
+    let mut app = App::new(".");
+
     terminal.hide_cursor().unwrap();
     terminal.clear().unwrap();
-
-    let (tx, rx) = sync_channel(0);
-    let mut file_view_state = FileViewState::new(".", tx.clone());
-    thread::spawn(move || {
-        let keys = io::stdin().keys();
-        for key in keys {
-            tx.send(Event::Key(key.unwrap())).unwrap();
-        }
-    });
     loop {
-        terminal
-            .draw(|mut frame| {
-                let file_view = FileView::default();
-                frame.render_stateful_widget(file_view, frame.size(), &mut file_view_state);
-            })
-            .unwrap();
-
-        match rx.recv().unwrap() {
-            Event::Key(Key::Char('q')) => break,
-            Event::FishExited => break,
-            event => file_view_state.handle_event(event),
-        }
+        app.draw(&mut terminal);
+        app.handle_event();
     }
 }

@@ -1,4 +1,5 @@
-use std::cmp::Ordering;
+use std::cmp;
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::os::unix::fs::FileTypeExt;
@@ -8,16 +9,13 @@ use std::thread;
 
 use crossbeam_channel::{bounded, select, Receiver};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use termion::{event::Key, input::TermRead, raw::IntoRawMode};
-use tui::{
-    backend::{Backend, TermionBackend},
-    layout::*,
-    style::*,
-    widgets::*,
-    Terminal,
-};
+use termion::{event::Key, input::TermRead};
+use tui::{backend::Backend, Terminal};
+use tui::{layout::*, style::*, widgets::*};
 
-use super::*;
+pub use shell::*;
+
+mod shell;
 
 struct FileInfo {
     path: PathBuf,
@@ -154,9 +152,9 @@ impl FileViewState {
 
         files.sort_unstable_by(|a, b| {
             if a.file_type == FileType::Directory && b.file_type != FileType::Directory {
-                Ordering::Less
+                cmp::Ordering::Less
             } else if a.file_type != FileType::Directory && b.file_type == FileType::Directory {
-                Ordering::Greater
+                cmp::Ordering::Greater
             } else {
                 a.name.cmp(&b.name)
             }
@@ -199,18 +197,21 @@ impl FileViewState {
     }
 }
 
-struct App {
+const CONFIG_FILE: &str = "open-methods.toml";
+
+pub struct FileManager {
     watcher: RecommendedWatcher,
     file_view_state: FileViewState,
     shell: Shell,
+    open_methods: HashMap<String, String>,
 
     watch_rx: Receiver<notify::Event>,
     key_rx: Receiver<Key>,
     shell_rx: Receiver<ShellEvent>,
 }
 
-impl App {
-    fn new(dir: impl Into<PathBuf>) -> Self {
+impl FileManager {
+    pub fn new(dir: impl Into<PathBuf>) -> Self {
         let (watch_tx, watch_rx) = bounded(0);
         let watcher =
             RecommendedWatcher::new_immediate(move |res: notify::Result<notify::Event>| {
@@ -230,11 +231,21 @@ impl App {
         let shell = Shell::new(shell_tx);
         let file_view_state = FileViewState::new();
 
+        let buf = fs::read_to_string(CONFIG_FILE).unwrap();
+        let raw: HashMap<String, Vec<String>> = toml::from_str(&buf).unwrap();
+        let mut open_methods = HashMap::new();
+        for (cmd, exts) in raw {
+            for ext in exts {
+                open_methods.insert(ext, cmd.clone());
+            }
+        }
+
         let mut app = Self {
             watcher,
             file_view_state,
-
+            open_methods,
             shell,
+
             watch_rx,
             key_rx,
             shell_rx,
@@ -258,7 +269,7 @@ impl App {
             .unwrap();
     }
 
-    fn draw<B: Backend>(&mut self, terminal: &mut Terminal<B>) {
+    pub fn draw<B: Backend>(&mut self, terminal: &mut Terminal<B>) {
         terminal
             .draw(|mut frame| {
                 let file_view = FileView::default();
@@ -267,14 +278,14 @@ impl App {
             .unwrap();
     }
 
-    fn handle_event(&mut self) {
+    pub fn handle_event(&mut self) {
         select! {
             recv(self.watch_rx) -> _watch => self.file_view_state.read_dir(),
             recv(self.shell_rx) -> shell_event => {
                 match shell_event.unwrap() {
                     ShellEvent::Pid(pid) => self.shell.set_pid(pid),
                     ShellEvent::ChangeDirectory(dir) => self.enter_directory(dir),
-                    ShellEvent::Exit => std::process::exit(1),
+                    ShellEvent::Exit => std::process::exit(0),
                 }
             }
             recv(self.key_rx) -> key => {
@@ -285,9 +296,15 @@ impl App {
                     Key::Char('G') | Key::End => self.file_view_state.select_last(),
                     Key::Char('l') | Key::Char('\n') => {
                         if let Some(selected) = self.file_view_state.selected() {
-                            let dir = selected.path.clone();
-                            self.enter_directory(dir);
-                            self.shell.cd(&self.file_view_state.dir);
+                            if selected.file_type == FileType::Directory {
+                                let dir = selected.path.clone();
+                                self.enter_directory(dir);
+                                self.shell.cd(&self.file_view_state.dir);
+                            } else {
+                                let ext = selected.path.extension().unwrap().to_str().unwrap();
+                                let open_cmd = &self.open_methods[ext];
+                                self.shell.run(&format!("{} '{}'", open_cmd, selected.path.to_str().unwrap()));
+                            }
                         }
                     }
                     Key::Char('h') | Key::Esc => {
@@ -316,21 +333,5 @@ impl App {
                 }
             }
         }
-    }
-}
-
-pub fn run() {
-    let mut terminal = {
-        let stdout = io::stdout().into_raw_mode().unwrap();
-        let backend = TermionBackend::new(stdout);
-        Terminal::new(backend).unwrap()
-    };
-    let mut app = App::new(".");
-
-    terminal.hide_cursor().unwrap();
-    terminal.clear().unwrap();
-    loop {
-        app.draw(&mut terminal);
-        app.handle_event();
     }
 }

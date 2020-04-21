@@ -1,7 +1,6 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::thread;
 
 use crossbeam_channel::Sender;
@@ -9,6 +8,7 @@ use nix::sys::signal::{kill, Signal};
 use nix::sys::stat::Mode;
 use nix::unistd::{mkfifo, Pid};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicI32, Ordering};
 
 pub const RECV_FIFO: &str = "/tmp/scd-recv-fifo";
 pub const SEND_FILE: &str = "/tmp/scd-send";

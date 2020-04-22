@@ -271,7 +271,11 @@ impl FileManager {
             recv(self.watch_rx) -> _watch => self.file_view_state.read_dir(),
             recv(self.shell_rx) -> shell_event => {
                 match shell_event.unwrap() {
-                    ShellEvent::ChangeDirectory(dir) => self.enter_directory(dir),
+                    ShellEvent::ChangeDirectory(dir) => {
+                        if dir != self.file_view_state.dir {
+                            self.enter_directory(dir);
+                        }
+                    }
                     ShellEvent::Exit => std::process::exit(0),
                     _ => {}
                 }

@@ -53,7 +53,7 @@ impl Default for FileView {
         Self {
             directory: (base.fg(Color::LightBlue), Some('/')),
             executable: (base.fg(Color::LightCyan), Some('*')),
-            symlink: (base, None),
+            symlink: (base, Some('@')),
             fifo: (base, Some('|')),
             socket: (base, None),
             char_device: (base, None),

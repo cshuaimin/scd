@@ -17,7 +17,7 @@ pub const CMDS_TO_RUN: &str = "/tmp/scd-cmds-to-run";
 /// Send `ShellEvent` from the shell to scd.
 pub const SHELL_EVENTS: &str = "/tmp/scd-shell-events";
 
-const OPEN_METHODS_CONFIG: &str = "open-methods.toml";
+const OPEN_METHODS_CONFIG: &str = "open-methods.yml";
 
 use super::*;
 
@@ -45,14 +45,14 @@ impl Shell {
     pub fn new(event_tx: Sender<ShellEvent>) -> Arc<Self> {
         let open_methods = {
             let buf = fs::read_to_string(OPEN_METHODS_CONFIG).unwrap();
-            let raw: HashMap<String, Vec<String>> = toml::from_str(&buf).unwrap();
-            let mut open_methods = HashMap::new();
+            let raw: HashMap<String, String> = serde_yaml::from_str(&buf).unwrap();
+            let mut res = HashMap::new();
             for (cmd, exts) in raw {
-                for ext in exts {
-                    open_methods.insert(ext, cmd.clone());
+                for ext in exts.split(',').map(str::trim) {
+                    res.insert(ext.to_string(), cmd.clone());
                 }
             }
-            open_methods
+            res
         };
 
         let (cmd_tx, cmd_rx) = bounded(0);

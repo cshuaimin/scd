@@ -1,10 +1,2 @@
-"tmux select-pane -t 1 && bat" = [
-    "rs",
-    "toml",
-    "md",
-]
-
-"tmux select-pane -t 1 && icat" = [
-    "png",
-    "jpg",
-]
+bat = ["rs", "toml", "md"]
+icat = ["png", "jpg"]

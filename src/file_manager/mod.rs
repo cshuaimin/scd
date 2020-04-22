@@ -1,10 +1,10 @@
 use std::cmp;
-use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread;
 
 use crossbeam_channel::{bounded, select, Receiver};
@@ -17,7 +17,7 @@ pub use shell::*;
 
 mod shell;
 
-struct FileInfo {
+pub struct FileInfo {
     path: PathBuf,
     name: String,
     file_type: FileType,
@@ -197,13 +197,10 @@ impl FileViewState {
     }
 }
 
-const CONFIG_FILE: &str = "open-methods.toml";
-
 pub struct FileManager {
     watcher: RecommendedWatcher,
     file_view_state: FileViewState,
-    shell: Shell,
-    open_methods: HashMap<String, String>,
+    shell: Arc<Shell>,
 
     watch_rx: Receiver<notify::Event>,
     key_rx: Receiver<Key>,
@@ -229,21 +226,12 @@ impl FileManager {
 
         let (shell_tx, shell_rx) = bounded(0);
         let shell = Shell::new(shell_tx);
-        let file_view_state = FileViewState::new();
 
-        let buf = fs::read_to_string(CONFIG_FILE).unwrap();
-        let raw: HashMap<String, Vec<String>> = toml::from_str(&buf).unwrap();
-        let mut open_methods = HashMap::new();
-        for (cmd, exts) in raw {
-            for ext in exts {
-                open_methods.insert(ext, cmd.clone());
-            }
-        }
+        let file_view_state = FileViewState::new();
 
         let mut app = Self {
             watcher,
             file_view_state,
-            open_methods,
             shell,
 
             watch_rx,
@@ -283,9 +271,9 @@ impl FileManager {
             recv(self.watch_rx) -> _watch => self.file_view_state.read_dir(),
             recv(self.shell_rx) -> shell_event => {
                 match shell_event.unwrap() {
-                    ShellEvent::Pid(pid) => self.shell.set_pid(pid),
                     ShellEvent::ChangeDirectory(dir) => self.enter_directory(dir),
                     ShellEvent::Exit => std::process::exit(0),
+                    _ => {}
                 }
             }
             recv(self.key_rx) -> key => {
@@ -301,9 +289,7 @@ impl FileManager {
                                 self.enter_directory(dir);
                                 self.shell.cd(&self.file_view_state.dir);
                             } else {
-                                let ext = selected.path.extension().unwrap().to_str().unwrap();
-                                let open_cmd = &self.open_methods[ext];
-                                self.shell.run(&format!("{} '{}'", open_cmd, selected.path.to_str().unwrap()));
+                                self.shell.open_file(&selected);
                             }
                         }
                     }

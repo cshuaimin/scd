@@ -1,4 +1,3 @@
-use std::fs;
 use std::io;
 use std::path::PathBuf;
 
@@ -44,13 +43,12 @@ fn main() {
     let opt = Opt::from_args();
     match opt.command {
         None => run(),
-        Some(Command::FishInit) => println!("{}", FISH_INIT),
-        Some(Command::GetCmd) => {
-            let buf = fs::read_to_string(SEND_FILE).unwrap();
-            println!("{}", buf);
-        }
-        Some(Command::Cd { dir }) => ShellEvent::ChangeDirectory(dir).emit(),
-        Some(Command::SendPid { pid }) => ShellEvent::Pid(pid).emit(),
-        Some(Command::Exit) => ShellEvent::Exit.emit(),
+        Some(command) => match command {
+            Command::FishInit => println!("{}", FISH_INIT),
+            Command::GetCmd => println!("{}", Shell::receive_command()),
+            Command::SendPid { pid } => Shell::send_event(ShellEvent::Pid(pid)),
+            Command::Cd { dir } => Shell::send_event(ShellEvent::ChangeDirectory(dir)),
+            Command::Exit => Shell::send_event(ShellEvent::Exit),
+        },
     }
 }

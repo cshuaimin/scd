@@ -47,7 +47,7 @@ impl Shell {
             let buf = fs::read_to_string(OPEN_METHODS_CONFIG).unwrap();
             let raw: HashMap<String, String> = serde_yaml::from_str(&buf).unwrap();
             let mut res = HashMap::new();
-            for (cmd, exts) in raw {
+            for (exts, cmd) in raw {
                 for ext in exts.split(',').map(str::trim) {
                     res.insert(ext.to_string(), cmd.clone());
                 }
@@ -113,16 +113,24 @@ impl Shell {
     }
 
     /// Run a command in the shell.
-    pub fn run(&self, cmd: &str, args: &[&str]) {
+    pub fn run(&self, cmd: &str, arg: &str) {
         if self.pid.load(Ordering::Acquire) > 0 {
-            let args = args.join(" ");
-            let cmd = format!("{} \"{}\" && commandline -f repaint", cmd, args);
+            let arg = format!(" '{}'", arg);
+            let mut cmd = match cmd.contains("{}") {
+                true => cmd.replace("{}", &arg),
+                false => {
+                    let mut cmd = cmd.to_string();
+                    cmd.push_str(&arg);
+                    cmd
+                }
+            };
+            cmd.push_str(" && commandline -f repaint");
             self.cmd_tx.send(cmd).unwrap();
         }
     }
 
     pub fn cd(&self, dir: &Path) {
-        self.run("cd", &[dir.to_str().unwrap()]);
+        self.run("cd", dir.to_str().unwrap());
     }
 
     pub fn open_file(&self, file: &FileInfo) {
@@ -134,7 +142,7 @@ impl Shell {
                 .map(|s| s.as_str())
                 .unwrap_or("xdg-open"),
         };
-        self.run(open_cmd, &[file.path.to_str().unwrap()]);
+        self.run(open_cmd, file.path.to_str().unwrap());
     }
 }
 

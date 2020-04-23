@@ -42,10 +42,13 @@ pub struct Shell {
 }
 
 impl Shell {
-    pub fn new(event_tx: Sender<ShellEvent>) -> Arc<Self> {
+    pub fn new(event_tx: Sender<ShellEvent>) -> Result<Arc<Self>> {
         let open_methods = {
-            let buf = fs::read_to_string(OPEN_METHODS_CONFIG).unwrap();
-            let raw: HashMap<String, String> = serde_yaml::from_str(&buf).unwrap();
+            let buf = fs::read_to_string(OPEN_METHODS_CONFIG).with_context(|| {
+                format!("Failed to read open methods from {}", OPEN_METHODS_CONFIG)
+            })?;
+            let raw: HashMap<String, String> = serde_yaml::from_str(&buf)
+                .with_context(|| format!("Failed to parse config file {}", OPEN_METHODS_CONFIG))?;
             let mut res = HashMap::new();
             for (exts, cmd) in raw {
                 for ext in exts.split(',').map(str::trim) {
@@ -74,46 +77,47 @@ impl Shell {
             move || shell.send_commands(cmd_rx)
         });
 
-        shell
+        Ok(shell)
     }
 
     /// Send commands sent from `rx` to the shell
     /// and notify the shell via SIGUSR1.
-    fn send_commands(self: Arc<Self>, rx: Receiver<String>) {
+    fn send_commands(self: Arc<Self>, rx: Receiver<String>) -> Result<()> {
         loop {
-            let cmd = rx.recv().unwrap();
+            let cmd = rx.recv()?;
             let pid = Pid::from_raw(self.pid.load(Ordering::Acquire));
-            kill(pid, Signal::SIGUSR1).unwrap();
-            fs::write(CMDS_TO_RUN, cmd).unwrap();
+            kill(pid, Signal::SIGUSR1).with_context(|| "Failed to notify the shell")?;
+            fs::write(CMDS_TO_RUN, cmd).with_context(|| "Failed to send command to shell")?;
         }
     }
 
     /// Receive a shell command to run.
     /// This function is called on the shell side.
-    pub fn receive_command() -> String {
-        fs::read_to_string(CMDS_TO_RUN).unwrap()
+    pub fn receive_command() -> Result<String> {
+        fs::read_to_string(CMDS_TO_RUN).with_context(|| "Failed to receive command")
     }
 
     /// Send a shell event to the file manager.
     /// This function is called on the shell side.
-    pub fn send_event(event: ShellEvent) {
-        let buf = serde_json::to_vec(&event).unwrap();
-        fs::write(SHELL_EVENTS, buf).unwrap();
+    pub fn send_event(event: ShellEvent) -> Result<()> {
+        let buf = serde_json::to_vec(&event)?;
+        fs::write(SHELL_EVENTS, buf).with_context(|| "Failed to send event to file manager")
     }
 
     /// Receive shell events and send it to `tx`.
-    pub fn receive_events(self: Arc<Self>, tx: Sender<ShellEvent>) {
+    pub fn receive_events(self: Arc<Self>, tx: Sender<ShellEvent>) -> Result<()> {
         loop {
-            let buf = fs::read_to_string(SHELL_EVENTS).unwrap();
-            match serde_json::from_str(&buf).unwrap() {
+            let buf =
+                fs::read_to_string(SHELL_EVENTS).with_context(|| "Failed to read shell event")?;
+            match serde_json::from_str(&buf)? {
                 ShellEvent::Pid(pid) => self.pid.store(pid, Ordering::Release),
-                other => tx.send(other).unwrap(),
+                other => tx.send(other)?,
             }
         }
     }
 
     /// Run a command in the shell.
-    pub fn run(&self, cmd: &str, arg: &str) {
+    pub fn run(&self, cmd: &str, arg: &str) -> Result<()> {
         if self.pid.load(Ordering::Acquire) > 0 {
             let arg = format!(" '{}'", arg);
             let mut cmd = match cmd.contains("{}") {
@@ -125,15 +129,16 @@ impl Shell {
                 }
             };
             cmd.push_str(" && commandline -f repaint");
-            self.cmd_tx.send(cmd).unwrap();
+            self.cmd_tx.send(cmd)?;
         }
+        Ok(())
     }
 
-    pub fn cd(&self, dir: &Path) {
-        self.run("cd", dir.to_str().unwrap());
+    pub fn cd(&self, dir: &Path) -> Result<()> {
+        self.run("cd", dir.to_str().unwrap())
     }
 
-    pub fn open_file(&self, file: &FileInfo) {
+    pub fn open_file(&self, file: &FileInfo) -> Result<()> {
         let open_cmd = match file.path.extension() {
             None => "xdg-open",
             Some(ext) => self
@@ -142,7 +147,7 @@ impl Shell {
                 .map(|s| s.as_str())
                 .unwrap_or("xdg-open"),
         };
-        self.run(open_cmd, file.path.to_str().unwrap());
+        self.run(open_cmd, file.path.to_str().unwrap())
     }
 }
 

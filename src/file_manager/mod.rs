@@ -13,6 +13,8 @@ use termion::{event::Key, input::TermRead};
 use tui::{backend::Backend, Terminal};
 use tui::{layout::*, style::*, widgets::*};
 
+use super::*;
+
 pub use shell::*;
 
 mod shell;
@@ -111,11 +113,8 @@ impl FileViewState {
         }
     }
 
-    fn read_dir(&mut self) {
-        let entries = fs::read_dir(&self.dir)
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+    fn read_dir(&mut self) -> Result<()> {
+        let entries = fs::read_dir(&self.dir)?.collect::<Result<Vec<_>, _>>()?;
         let mut files: Vec<FileInfo> = entries
             .into_iter()
             .map(|entry| {
@@ -160,6 +159,7 @@ impl FileViewState {
             }
         });
         self.files = files;
+        Ok(())
     }
 
     fn selected(&self) -> Option<&FileInfo> {
@@ -208,13 +208,12 @@ pub struct FileManager {
 }
 
 impl FileManager {
-    pub fn new(dir: impl Into<PathBuf>) -> Self {
+    pub fn new(dir: impl Into<PathBuf>) -> Result<Self> {
         let (watch_tx, watch_rx) = bounded(0);
         let watcher =
             RecommendedWatcher::new_immediate(move |res: notify::Result<notify::Event>| {
                 watch_tx.send(res.unwrap()).unwrap();
-            })
-            .unwrap();
+            })?;
 
         let (key_tx, key_rx) = bounded(0);
         thread::spawn(move || {
@@ -225,7 +224,7 @@ impl FileManager {
         });
 
         let (shell_tx, shell_rx) = bounded(0);
-        let shell = Shell::new(shell_tx);
+        let shell = Shell::new(shell_tx)?;
 
         let file_view_state = FileViewState::new();
 
@@ -238,42 +237,40 @@ impl FileManager {
             key_rx,
             shell_rx,
         };
-        app.enter_directory(dir.into().canonicalize().unwrap());
+        app.enter_directory(dir.into().canonicalize()?)?;
 
-        app
+        Ok(app)
     }
 
-    fn enter_directory(&mut self, dir: PathBuf) {
+    fn enter_directory(&mut self, dir: PathBuf) -> Result<()> {
         if self.file_view_state.dir != PathBuf::new() {
-            self.watcher.unwatch(&self.file_view_state.dir).unwrap();
+            self.watcher.unwatch(&self.file_view_state.dir)?;
         }
         self.file_view_state.dir = dir;
-        self.file_view_state.read_dir();
+        self.file_view_state.read_dir()?;
         if self.file_view_state.files.len() > 0 {
             self.file_view_state.list_state.select(Some(0));
         }
         self.watcher
-            .watch(&self.file_view_state.dir, RecursiveMode::NonRecursive)
-            .unwrap();
+            .watch(&self.file_view_state.dir, RecursiveMode::NonRecursive)?;
+        Ok(())
     }
 
-    pub fn draw<B: Backend>(&mut self, terminal: &mut Terminal<B>) {
-        terminal
-            .draw(|mut frame| {
-                let file_view = FileView::default();
-                frame.render_stateful_widget(file_view, frame.size(), &mut self.file_view_state);
-            })
-            .unwrap();
+    pub fn draw<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> io::Result<()> {
+        terminal.draw(|mut frame| {
+            let file_view = FileView::default();
+            frame.render_stateful_widget(file_view, frame.size(), &mut self.file_view_state);
+        })
     }
 
-    pub fn handle_event(&mut self) {
+    pub fn handle_event(&mut self) -> Result<()> {
         select! {
-            recv(self.watch_rx) -> _watch => self.file_view_state.read_dir(),
+            recv(self.watch_rx) -> _watch => self.file_view_state.read_dir()?,
             recv(self.shell_rx) -> shell_event => {
-                match shell_event.unwrap() {
+                match shell_event? {
                     ShellEvent::ChangeDirectory(dir) => {
                         if dir != self.file_view_state.dir {
-                            self.enter_directory(dir);
+                            self.enter_directory(dir)?;
                         }
                     }
                     ShellEvent::Exit => std::process::exit(0),
@@ -281,7 +278,7 @@ impl FileManager {
                 }
             }
             recv(self.key_rx) -> key => {
-                match key.unwrap() {
+                match key? {
                     Key::Char('j') | Key::Down => self.file_view_state.select_next(),
                     Key::Char('k') | Key::Up => self.file_view_state.select_prev(),
                     Key::Char('g') | Key::Home => self.file_view_state.select_first(),
@@ -290,10 +287,10 @@ impl FileManager {
                         if let Some(selected) = self.file_view_state.selected() {
                             if selected.file_type == FileType::Directory {
                                 let dir = selected.path.clone();
-                                self.enter_directory(dir);
-                                self.shell.cd(&self.file_view_state.dir);
+                                self.enter_directory(dir)?;
+                                self.shell.cd(&self.file_view_state.dir)?;
                             } else {
-                                self.shell.open_file(&selected);
+                                self.shell.open_file(&selected)?;
                             }
                         }
                     }
@@ -308,14 +305,14 @@ impl FileManager {
                                 .to_str()
                                 .unwrap()
                                 .to_owned();
-                            self.enter_directory(parent);
+                            self.enter_directory(parent)?;
                             let index = self
                                 .file_view_state
                                 .files
                                 .iter()
                                 .position(|file| file.name == current_dir_name);
                             self.file_view_state.list_state.select(index);
-                            self.shell.cd(&self.file_view_state.dir);
+                            self.shell.cd(&self.file_view_state.dir)?;
                         }
                     }
                     Key::Char('q') => std::process::exit(0),
@@ -323,5 +320,6 @@ impl FileManager {
                 }
             }
         }
+        Ok(())
     }
 }

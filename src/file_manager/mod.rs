@@ -263,7 +263,7 @@ impl FileManager {
         })
     }
 
-    pub fn handle_event(&mut self) -> Result<()> {
+    pub fn handle_event(&mut self) -> Result<bool> {
         select! {
             recv(self.watch_rx) -> _watch => self.file_view_state.read_dir()?,
             recv(self.shell_rx) -> shell_event => {
@@ -273,7 +273,7 @@ impl FileManager {
                             self.enter_directory(dir)?;
                         }
                     }
-                    ShellEvent::Exit => std::process::exit(0),
+                    ShellEvent::Exit => return Ok(true),
                     _ => {}
                 }
             }
@@ -315,11 +315,11 @@ impl FileManager {
                             self.shell.cd(&self.file_view_state.dir)?;
                         }
                     }
-                    Key::Char('q') => std::process::exit(0),
+                    Key::Char('q') => return Ok(true),
                     _ => {}
                 }
             }
         }
-        Ok(())
+        Ok(false)
     }
 }

@@ -65,9 +65,6 @@ impl Shell {
             open_methods,
         });
 
-        let _ = mkfifo(CMDS_TO_RUN, Mode::S_IRWXU);
-        let _ = mkfifo(SHELL_EVENTS, Mode::S_IRWXU);
-
         thread::spawn({
             let shell = shell.clone();
             move || shell.receive_events(event_tx)
@@ -83,6 +80,7 @@ impl Shell {
     /// Send commands sent from `rx` to the shell
     /// and notify the shell via SIGUSR1.
     fn send_commands(self: Arc<Self>, rx: Receiver<String>) -> Result<()> {
+        let _ = mkfifo(CMDS_TO_RUN, Mode::S_IRWXU);
         loop {
             let cmd = rx.recv()?;
             let pid = Pid::from_raw(self.pid.load(Ordering::Acquire));
@@ -94,18 +92,21 @@ impl Shell {
     /// Receive a shell command to run.
     /// This function is called on the shell side.
     pub fn receive_command() -> Result<String> {
+        let _ = mkfifo(CMDS_TO_RUN, Mode::S_IRWXU);
         fs::read_to_string(CMDS_TO_RUN).with_context(|| "Failed to receive command")
     }
 
     /// Send a shell event to the file manager.
     /// This function is called on the shell side.
     pub fn send_event(event: ShellEvent) -> Result<()> {
+        let _ = mkfifo(SHELL_EVENTS, Mode::S_IRWXU);
         let buf = serde_json::to_vec(&event)?;
         fs::write(SHELL_EVENTS, buf).with_context(|| "Failed to send event to file manager")
     }
 
     /// Receive shell events and send it to `tx`.
     pub fn receive_events(self: Arc<Self>, tx: Sender<ShellEvent>) -> Result<()> {
+        let _ = mkfifo(SHELL_EVENTS, Mode::S_IRWXU);
         loop {
             let buf =
                 fs::read_to_string(SHELL_EVENTS).with_context(|| "Failed to read shell event")?;

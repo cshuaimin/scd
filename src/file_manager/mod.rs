@@ -4,7 +4,6 @@ use std::io;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::thread;
 
 use crossbeam_channel::{bounded, select, Receiver};
@@ -200,7 +199,7 @@ impl FileViewState {
 pub struct FileManager {
     watcher: RecommendedWatcher,
     file_view_state: FileViewState,
-    shell: Arc<Shell>,
+    shell: Shell,
 
     watch_rx: Receiver<notify::Event>,
     key_rx: Receiver<Key>,

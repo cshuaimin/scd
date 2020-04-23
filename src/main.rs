@@ -1,5 +1,4 @@
 use std::io;
-use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -36,13 +35,13 @@ pub fn run() -> Result<()> {
     terminal.hide_cursor()?;
     terminal.clear()?;
 
-    let mut quit = false;
-    while !quit {
+    loop {
         file_manager.draw(&mut terminal)?;
-        quit = file_manager.handle_event()?;
+        let exit = file_manager.handle_event()?;
+        if exit {
+            break;
+        }
     }
-    fs::remove_file(CMDS_TO_RUN)?;
-    fs::remove_file(SHELL_EVENTS)?;
     terminal.clear()?;
     Ok(())
 }

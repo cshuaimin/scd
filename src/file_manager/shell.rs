@@ -36,13 +36,13 @@ pub enum ShellEvent {
 
 #[derive(Debug)]
 pub struct Shell {
-    pid: AtomicI32,
+    pid: Arc<AtomicI32>,
     cmd_tx: Sender<String>,
     open_methods: HashMap<String, String>,
 }
 
 impl Shell {
-    pub fn new(event_tx: Sender<ShellEvent>) -> Result<Arc<Self>> {
+    pub fn new(event_tx: Sender<ShellEvent>) -> Result<Self> {
         let open_methods = {
             let buf = fs::read_to_string(OPEN_METHODS_CONFIG).with_context(|| {
                 format!("Failed to read open methods from {}", OPEN_METHODS_CONFIG)
@@ -58,32 +58,32 @@ impl Shell {
             res
         };
 
+        let pid = Arc::new(AtomicI32::new(0));
+
         let (cmd_tx, cmd_rx) = bounded(0);
-        let shell = Arc::new(Self {
-            pid: AtomicI32::new(0),
+        thread::spawn({
+            let pid = pid.clone();
+            move || Self::receive_events(pid, event_tx)
+        });
+        thread::spawn({
+            let pid = pid.clone();
+            move || Self::send_commands(pid, cmd_rx)
+        });
+
+        Ok(Self {
+            pid,
             cmd_tx,
             open_methods,
-        });
-
-        thread::spawn({
-            let shell = shell.clone();
-            move || shell.receive_events(event_tx)
-        });
-        thread::spawn({
-            let shell = shell.clone();
-            move || shell.send_commands(cmd_rx)
-        });
-
-        Ok(shell)
+        })
     }
 
     /// Send commands sent from `rx` to the shell
     /// and notify the shell via SIGUSR1.
-    fn send_commands(self: Arc<Self>, rx: Receiver<String>) -> Result<()> {
+    fn send_commands(pid: Arc<AtomicI32>, rx: Receiver<String>) -> Result<()> {
         let _ = mkfifo(CMDS_TO_RUN, Mode::S_IRWXU);
         loop {
             let cmd = rx.recv()?;
-            let pid = Pid::from_raw(self.pid.load(Ordering::Acquire));
+            let pid = Pid::from_raw(pid.load(Ordering::Acquire));
             kill(pid, Signal::SIGUSR1).with_context(|| "Failed to notify the shell")?;
             fs::write(CMDS_TO_RUN, cmd).with_context(|| "Failed to send command to shell")?;
         }
@@ -105,13 +105,13 @@ impl Shell {
     }
 
     /// Receive shell events and send it to `tx`.
-    pub fn receive_events(self: Arc<Self>, tx: Sender<ShellEvent>) -> Result<()> {
+    pub fn receive_events(pid: Arc<AtomicI32>, tx: Sender<ShellEvent>) -> Result<()> {
         let _ = mkfifo(SHELL_EVENTS, Mode::S_IRWXU);
         loop {
             let buf =
                 fs::read_to_string(SHELL_EVENTS).with_context(|| "Failed to read shell event")?;
             match serde_json::from_str(&buf)? {
-                ShellEvent::Pid(pid) => self.pid.store(pid, Ordering::Release),
+                ShellEvent::Pid(p) => pid.store(p, Ordering::Release),
                 other => tx.send(other)?,
             }
         }
@@ -149,6 +149,13 @@ impl Shell {
                 .unwrap_or("xdg-open"),
         };
         self.run(open_cmd, file.path.to_str().unwrap())
+    }
+}
+
+impl Drop for Shell {
+    fn drop(&mut self) {
+        fs::remove_file(CMDS_TO_RUN).unwrap();
+        fs::remove_file(SHELL_EVENTS).unwrap();
     }
 }
 

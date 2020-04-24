@@ -1,14 +1,12 @@
-use std::io;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use structopt::StructOpt;
-use termion::raw::IntoRawMode;
-use tui::{backend::TermionBackend, Terminal};
 
-use file_manager::*;
+use widgets::*;
 
-mod file_manager;
+mod app;
+mod widgets;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -24,32 +22,10 @@ enum Command {
     SendPid { pid: i32 },
     Exit,
 }
-
-pub fn run() -> Result<()> {
-    let mut terminal = {
-        let stdout = io::stdout().into_raw_mode()?;
-        let backend = TermionBackend::new(stdout);
-        Terminal::new(backend)?
-    };
-    let mut file_manager = FileManager::new(".")?;
-    terminal.hide_cursor()?;
-    terminal.clear()?;
-
-    loop {
-        file_manager.draw(&mut terminal)?;
-        let exit = file_manager.handle_event()?;
-        if exit {
-            break;
-        }
-    }
-    terminal.clear()?;
-    Ok(())
-}
-
 fn main() -> Result<()> {
     let opt = Opt::from_args();
     match opt.command {
-        None => run()?,
+        None => app::run()?,
         Some(command) => match command {
             Command::FishInit => println!("{}", FISH_INIT),
             Command::GetCmd => println!("{}", Shell::receive_command()?),

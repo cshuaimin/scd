@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
+use anyhow::{Context, Result};
 use crossbeam_channel::Sender;
 use nix::sys::signal::{kill, Signal};
 use nix::sys::stat::Mode;

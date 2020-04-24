@@ -48,11 +48,12 @@ impl App {
         let (shell_tx, shell_rx) = bounded(0);
         let shell = Shell::new(shell_tx)?;
 
-        let tick = tick(Duration::from_secs(1));
+        let tick = tick(Duration::from_secs(2));
 
         let file_view_state = FileViewState::new();
         let mut system = System::new_all();
-        system.refresh_all();
+        system.refresh_cpu();
+        system.refresh_memory();
 
         let mut app = Self {
             watcher,
@@ -88,7 +89,7 @@ impl App {
         terminal.draw(|mut frame| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(5), Constraint::Min(0)].as_ref())
+                .constraints([Constraint::Length(8), Constraint::Min(0)].as_ref())
                 .split(frame.size());
             frame.render_stateful_widget(SystemMonitor, chunks[0], &mut self.system);
             frame.render_stateful_widget(FileView::default(), chunks[1], &mut self.file_view_state);
@@ -97,7 +98,10 @@ impl App {
 
     pub fn handle_event(&mut self) -> Result<bool> {
         select! {
-            recv(self.tick) -> _tick => self.system.refresh_all(),
+            recv(self.tick) -> _tick => {
+                self.system.refresh_cpu();
+                self.system.refresh_memory();
+            }
             recv(self.watch_rx) -> _watch => self.file_view_state.read_dir()?,
             recv(self.shell_rx) -> shell_event => {
                 match shell_event? {

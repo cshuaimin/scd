@@ -6,10 +6,14 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, Receiver};
-use tui::{layout::*, style::*, widgets::*};
+use tui::layout::{Constraint, Direction, Layout, Rect};
+use tui::style::{Color, Modifier, Style};
+use tui::widgets::{List, ListState, Paragraph, StatefulWidget, Text, Widget};
 
+use icons::*;
 pub use shell::*;
 
+mod icons;
 pub mod shell;
 
 pub struct FileInfo {
@@ -30,62 +34,51 @@ pub enum FileType {
     Other,
 }
 
-pub struct FileView {
-    directory: (Style, Option<char>),
-    executable: (Style, Option<char>),
-    symlink: (Style, Option<char>),
-    fifo: (Style, Option<char>),
-    socket: (Style, Option<char>),
-    char_device: (Style, Option<char>),
-    block_device: (Style, Option<char>),
-    other: (Style, Option<char>),
-    highlight_style: Style,
-}
-
-impl Default for FileView {
-    fn default() -> Self {
-        let base = Style::default();
-        Self {
-            directory: (base.fg(Color::LightBlue), Some('/')),
-            executable: (base.fg(Color::LightCyan), Some('*')),
-            symlink: (base, Some('@')),
-            fifo: (base, Some('|')),
-            socket: (base, None),
-            char_device: (base, None),
-            block_device: (base, None),
-            other: (base, None),
-            highlight_style: base.bg(Color::Blue),
-        }
-    }
-}
-
-impl FileView {
-    fn apply(&self, file: &FileInfo) -> Text {
-        let (style, postfix) = match file.file_type {
-            FileType::Directory => self.directory,
-            FileType::Executable => self.executable,
-            FileType::Symlink => self.symlink,
-            FileType::Fifo => self.fifo,
-            FileType::Socket => self.socket,
-            FileType::CharDevice => self.char_device,
-            FileType::BlockDevice => self.block_device,
-            FileType::Other => self.other,
-        };
-        let mut name = file.name.clone();
-        if let Some(postfix) = postfix {
-            name.push(postfix);
-        }
-        Text::styled(name, style)
-    }
-}
+pub struct FileView;
 
 impl StatefulWidget for FileView {
     type State = FileViewState;
 
     fn render(self, area: Rect, buf: &mut tui::buffer::Buffer, state: &mut Self::State) {
-        let items = state.files.iter().map(|file| self.apply(file));
-        let list = List::new(items).highlight_style(self.highlight_style);
-        StatefulWidget::render(list, area, buf, &mut state.list_state);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(2), Constraint::Min(0)].as_ref())
+            .split(area);
+        Paragraph::new(
+            [Text::styled(
+                state.dir.to_str().unwrap(),
+                Style::default().modifier(Modifier::UNDERLINED),
+            )]
+            .iter(),
+        )
+        .render(chunks[0], buf);
+        let items = state
+            .files
+            .iter()
+            .map(|file| {
+                let color = match file.file_type {
+                    FileType::Directory => Color::Blue,
+                    FileType::Executable => Color::Green,
+                    _ => Color::White,
+                };
+                let icon = state.icons.get(file);
+                let postfix = match file.file_type {
+                    FileType::Directory => "/",
+                    FileType::Executable => "*",
+                    FileType::Fifo => "|",
+                    FileType::Symlink => "@",
+                    _ => "",
+                };
+                Text::styled(
+                    format!("{}  {}{}", icon, file.name, postfix),
+                    Style::default().fg(color),
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_iter();
+        let list =
+            List::new(items).highlight_style(Style::default().fg(Color::Black).bg(Color::Blue));
+        StatefulWidget::render(list, chunks[1], buf, &mut state.list_state);
     }
 }
 
@@ -94,6 +87,7 @@ pub struct FileViewState {
     pub files: Vec<FileInfo>,
     pub list_state: ListState,
     pub show_hidden_files: bool,
+    icons: Icons,
 }
 
 impl FileViewState {
@@ -103,6 +97,7 @@ impl FileViewState {
             files: vec![],
             list_state: ListState::default(),
             show_hidden_files: false,
+            icons: Icons::new(),
         }
     }
 

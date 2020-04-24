@@ -1,4 +1,4 @@
-toml, yaml, yml, json, ron, ini, conf, txt: bat
+toml, yaml, yml, json, ron, ini, conf, txt, md: bat
 rs, py, go, js, html, css, c, cc, cpp, sh, fish: bat
 png, jpg, webp: icat
 pdf: pdftotext {} - | less --quit-if-one-screen

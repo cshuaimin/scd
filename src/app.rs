@@ -89,10 +89,11 @@ impl App {
         terminal.draw(|mut frame| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(8), Constraint::Min(0)].as_ref())
+                .horizontal_margin(1)
+                .constraints([Constraint::Length(9), Constraint::Min(0)].as_ref())
                 .split(frame.size());
             frame.render_stateful_widget(SystemMonitor, chunks[0], &mut self.system);
-            frame.render_stateful_widget(FileView::default(), chunks[1], &mut self.file_view_state);
+            frame.render_stateful_widget(FileView, chunks[1], &mut self.file_view_state);
         })
     }
 

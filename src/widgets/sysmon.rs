@@ -2,7 +2,7 @@ use sysinfo::{ProcessorExt, System, SystemExt};
 
 use tui::buffer::Buffer;
 use tui::layout::Rect;
-use tui::layout::{Alignment, Constraint, Direction, Layout};
+use tui::layout::{Constraint, Direction, Layout};
 use tui::style::{Color, Style};
 use tui::widgets::{Paragraph, StatefulWidget, Text, Widget};
 
@@ -10,9 +10,13 @@ fn draw_progress_bar(label: &str, mut percentage: u16, area: Rect, buf: &mut Buf
     if percentage > 100 {
         percentage = 0;
     }
+    if area.width <= 5 {
+        return;
+    }
+
     let width = area.width - 5;
+    let sep = area.left() + width * percentage / 100;
     let end = area.left() + width;
-    let sep = end * percentage / 100;
 
     buf.set_string(area.left(), area.top(), label, Style::default());
     for x in area.left()..sep {
@@ -78,11 +82,9 @@ impl StatefulWidget for SystemMonitor {
 
         let avg = system.get_load_average();
         let load_average = format!("LA {} {} {}", avg.one, avg.five, avg.fifteen);
-        Paragraph::new([Text::raw(load_average)].iter())
-            .render(chunks[0], buf);
+        Paragraph::new([Text::raw(load_average)].iter()).render(chunks[0], buf);
         let uptime = format_time(system.get_uptime());
-        Paragraph::new([Text::raw("Up "), Text::raw(uptime)].iter())
-            .render(chunks[1], buf);
+        Paragraph::new([Text::raw("UP "), Text::raw(uptime)].iter()).render(chunks[1], buf);
 
         let cpu_usage = system.get_global_processor_info().get_cpu_usage().round() as u16;
         draw_progress_bar("CPU", cpu_usage, chunks[3], buf);

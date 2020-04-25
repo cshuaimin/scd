@@ -1,5 +1,4 @@
 use sysinfo::{ProcessorExt, System, SystemExt};
-
 use tui::buffer::Buffer;
 use tui::layout::Rect;
 use tui::layout::{Constraint, Direction, Layout};

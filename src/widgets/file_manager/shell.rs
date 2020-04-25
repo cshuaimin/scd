@@ -119,25 +119,33 @@ impl Shell {
     }
 
     /// Run a command in the shell.
-    pub fn run(&self, cmd: &str, arg: &str) -> Result<()> {
+    ///
+    /// The command will be shown in the terminal, as if typed by the user.
+    pub fn run(&self, cmd: &str, args: &[&str]) -> Result<()> {
         if self.pid.load(Ordering::Acquire) > 0 {
-            let arg = format!(" '{}'", arg);
-            let mut cmd = match cmd.contains("{}") {
-                true => cmd.replace("{}", &arg),
-                false => {
-                    let mut cmd = cmd.to_string();
-                    cmd.push_str(&arg);
-                    cmd
-                }
+            let args = args
+                .into_iter()
+                .map(|a| format!("'{}'", a))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let cmd = match cmd.contains("{}") {
+                true => cmd.replace("{}", &args),
+                false => format!("{} {}", cmd, args),
             };
-            cmd.push_str(" && commandline -f repaint");
-            self.cmd_tx.send(cmd)?;
+            self.cmd_tx
+                .send(format!("commandline '{}' && commandline -f execute", cmd))?;
         }
         Ok(())
     }
 
     pub fn cd(&self, dir: &Path) -> Result<()> {
-        self.run("cd", dir.to_str().unwrap())
+        if self.pid.load(Ordering::Acquire) > 0 {
+            self.cmd_tx.send(format!(
+                "cd '{}' && commandline -f repaint",
+                dir.to_str().unwrap()
+            ))?;
+        }
+        Ok(())
     }
 
     pub fn open_file(&self, file: &FileInfo) -> Result<()> {
@@ -149,7 +157,7 @@ impl Shell {
                 .map(|s| s.as_str())
                 .unwrap_or("xdg-open"),
         };
-        self.run(open_cmd, file.path.to_str().unwrap())
+        self.run(open_cmd, &[file.path.to_str().unwrap()])
     }
 }
 

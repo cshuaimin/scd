@@ -77,7 +77,7 @@ impl App {
         }
         self.file_view_state.dir = dir;
         self.file_view_state.read_dir()?;
-        if self.file_view_state.files.len() > 0 {
+        if self.file_view_state.filtered_files.len() > 0 {
             self.file_view_state.list_state.select(Some(0));
         }
         self.watcher
@@ -85,11 +85,25 @@ impl App {
         Ok(())
     }
 
+    fn marked_files(&self) -> Vec<&str> {
+        self.file_view_state
+            .marked_files
+            .iter()
+            .map(|path| {
+                if path.parent().unwrap() == self.file_view_state.dir {
+                    path.file_name().unwrap().to_str().unwrap()
+                } else {
+                    path.to_str().unwrap()
+                }
+            })
+            .collect()
+    }
+
     pub fn draw<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> io::Result<()> {
         terminal.draw(|mut frame| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .horizontal_margin(1)
+                // .horizontal_margin(1)
                 .constraints([Constraint::Length(9), Constraint::Min(0)].as_ref())
                 .split(frame.size());
             frame.render_stateful_widget(SystemMonitor, chunks[0], &mut self.system);
@@ -155,7 +169,23 @@ impl App {
                     }
                     Key::Char('.') => {
                         self.file_view_state.show_hidden_files = !self.file_view_state.show_hidden_files;
-                        self.file_view_state.read_dir()?;
+                    }
+                    Key::Char(' ') => {
+                        if let Some(selected) = self.file_view_state.selected() {
+                            if let Some(idx) = self.file_view_state.marked_files.iter().position(|p| p == &selected.path) {
+                                self.file_view_state.marked_files.remove(idx);
+                            } else {
+                                let path = selected.path.clone();
+                                self.file_view_state.marked_files.push(path);
+                            }
+                            self.file_view_state.select_next();
+                        }
+                    }
+                    Key::Char('p') => {
+                        self.shell.run("cp -r {} .", &self.marked_files())?;
+                    }
+                    Key::Char('m') => {
+                        self.shell.run("mv {} .", &self.marked_files())?;
                     }
                     Key::Char('q') => return Ok(true),
                     _ => {}

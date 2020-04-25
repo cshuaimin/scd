@@ -16,13 +16,14 @@ pub use shell::*;
 mod icons;
 pub mod shell;
 
+#[derive(PartialEq, Clone)]
 pub struct FileInfo {
     pub path: PathBuf,
     pub name: String,
     pub file_type: FileType,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub enum FileType {
     Directory,
     Executable,
@@ -42,7 +43,7 @@ impl StatefulWidget for FileView {
     fn render(self, area: Rect, buf: &mut tui::buffer::Buffer, state: &mut Self::State) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(2), Constraint::Min(0)].as_ref())
+            .constraints([Constraint::Length(1), Constraint::Min(0)].as_ref())
             .split(area);
         Paragraph::new(
             [Text::styled(
@@ -53,7 +54,7 @@ impl StatefulWidget for FileView {
         )
         .render(chunks[0], buf);
         let items = state
-            .files
+            .filtered_files
             .iter()
             .map(|file| {
                 let color = match file.file_type {
@@ -61,8 +62,12 @@ impl StatefulWidget for FileView {
                     FileType::Executable => Color::Green,
                     _ => Color::White,
                 };
+                let selected = match state.marked_files.contains(&file.path) {
+                    true => "+",
+                    false => " ",
+                };
                 let icon = state.icons.get(file);
-                let postfix = match file.file_type {
+                let suffix = match file.file_type {
                     FileType::Directory => "/",
                     FileType::Executable => "*",
                     FileType::Fifo => "|",
@@ -70,7 +75,7 @@ impl StatefulWidget for FileView {
                     _ => "",
                 };
                 Text::styled(
-                    format!("{}  {}{}", icon, file.name, postfix),
+                    format!("{}{} {}{}", selected, icon, file.name, suffix),
                     Style::default().fg(color),
                 )
             })
@@ -85,8 +90,11 @@ impl StatefulWidget for FileView {
 pub struct FileViewState {
     pub dir: PathBuf,
     pub files: Vec<FileInfo>,
-    pub list_state: ListState,
+    pub filtered_files: Vec<FileInfo>,
+    pub marked_files: Vec<PathBuf>,
+    pub filter: String,
     pub show_hidden_files: bool,
+    pub list_state: ListState,
     icons: Icons,
 }
 
@@ -95,8 +103,11 @@ impl FileViewState {
         FileViewState {
             dir: PathBuf::new(),
             files: vec![],
-            list_state: ListState::default(),
+            filtered_files: vec![],
+            filter: String::new(),
             show_hidden_files: false,
+            marked_files: vec![],
+            list_state: ListState::default(),
             icons: Icons::new(),
         }
     }
@@ -134,7 +145,6 @@ impl FileViewState {
                     file_type,
                 }
             })
-            .filter(|file| self.show_hidden_files || !file.name.starts_with('.'))
             .collect();
 
         files.sort_unstable_by(|a, b| {
@@ -146,21 +156,36 @@ impl FileViewState {
                 a.name.cmp(&b.name)
             }
         });
+
         self.files = files;
+        self.filtered_files = self
+            .files
+            .iter()
+            .filter(|file| self.show_hidden_files || !file.name.starts_with('.'))
+            .filter(|file| file.name.contains(&self.filter))
+            .cloned()
+            .collect();
+
         Ok(())
     }
 
     pub fn selected(&self) -> Option<&FileInfo> {
-        self.list_state.selected().map(|index| &self.files[index])
+        self.list_state
+            .selected()
+            .map(|index| &self.filtered_files[index])
     }
 
     pub fn select_first(&mut self) {
-        let index = if self.files.len() == 0 { None } else { Some(0) };
+        let index = if self.filtered_files.len() == 0 {
+            None
+        } else {
+            Some(0)
+        };
         self.list_state.select(index);
     }
 
     pub fn select_last(&mut self) {
-        let index = match self.files.len() {
+        let index = match self.filtered_files.len() {
             0 => None,
             len => Some(len - 1),
         };
@@ -170,7 +195,7 @@ impl FileViewState {
     pub fn select_next(&mut self) {
         let index = match self.list_state.selected() {
             None => 0,
-            Some(i) => (i + 1) % self.files.len(),
+            Some(i) => (i + 1) % self.filtered_files.len(),
         };
         self.list_state.select(Some(index));
     }
@@ -178,7 +203,7 @@ impl FileViewState {
     pub fn select_prev(&mut self) {
         let index = match self.list_state.selected() {
             None => 0,
-            Some(0) => self.files.len() - 1,
+            Some(0) => self.filtered_files.len() - 1,
             Some(i) => i - 1,
         };
         self.list_state.select(Some(index));

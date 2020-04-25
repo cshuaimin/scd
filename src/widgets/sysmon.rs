@@ -3,38 +3,46 @@ use sysinfo::{ProcessorExt, System, SystemExt};
 use tui::buffer::Buffer;
 use tui::layout::Rect;
 use tui::layout::{Constraint, Direction, Layout};
-use tui::style::{Color, Style};
+use tui::style::{Color, Modifier, Style};
 use tui::widgets::{Paragraph, StatefulWidget, Text, Widget};
 
-fn draw_progress_bar(label: &str, mut percentage: u16, area: Rect, buf: &mut Buffer) {
-    if percentage > 100 {
-        percentage = 0;
-    }
-    if area.width <= 5 {
-        return;
-    }
+struct Meter<'a> {
+    label: &'a str,
+    percentage: u16,
+    value_style: Style,
+}
 
-    let width = area.width - 5;
-    let sep = area.left() + width * percentage / 100;
-    let end = area.left() + width;
+impl<'a> Widget for Meter<'a> {
+    fn render(mut self, area: Rect, buf: &mut Buffer) {
+        if self.percentage > 100 {
+            self.percentage = 0;
+        }
+        if area.width <= 5 {
+            return;
+        }
 
-    buf.set_string(area.left(), area.top(), label, Style::default());
-    for x in area.left()..sep {
-        buf.get_mut(x, area.top() + 1)
-            .set_fg(Color::Green)
-            .set_symbol("■");
+        let width = area.width - 5;
+        let sep = area.left() + width * self.percentage / 100;
+        let end = area.left() + width;
+
+        buf.set_string(area.left(), area.top(), self.label, Style::default());
+        for x in area.left()..sep {
+            buf.get_mut(x, area.top() + 1)
+                .set_fg(self.value_style.fg)
+                .set_symbol("■");
+        }
+        for x in sep..end {
+            buf.get_mut(x, area.top() + 1)
+                .set_fg(Color::DarkGray)
+                .set_symbol("■");
+        }
+        buf.set_string(
+            end + 1,
+            area.top() + 1,
+            format!("{:>3}%", self.percentage),
+            self.value_style,
+        );
     }
-    for x in sep..end {
-        buf.get_mut(x, area.top() + 1)
-            .set_fg(Color::DarkGray)
-            .set_symbol("■");
-    }
-    buf.set_string(
-        end + 1,
-        area.top() + 1,
-        format!("{:>3}%", percentage),
-        Style::default(),
-    );
 }
 
 fn format_time(mut secs: u64) -> String {
@@ -79,16 +87,32 @@ impl StatefulWidget for SystemMonitor {
                 .as_ref(),
             )
             .split(area);
+        let value_style = Style::default()
+            .fg(Color::LightCyan)
+            .modifier(Modifier::BOLD);
 
         let avg = system.get_load_average();
-        let load_average = format!("LA {} {} {}", avg.one, avg.five, avg.fifteen);
-        Paragraph::new([Text::raw(load_average)].iter()).render(chunks[0], buf);
+        let load_average = format!("{} {} {}", avg.one, avg.five, avg.fifteen);
+        Paragraph::new([Text::raw("LA "), Text::styled(load_average, value_style)].iter())
+            .render(chunks[0], buf);
         let uptime = format_time(system.get_uptime());
-        Paragraph::new([Text::raw("UP "), Text::raw(uptime)].iter()).render(chunks[1], buf);
+        Paragraph::new([Text::raw("UP "), Text::styled(uptime, value_style)].iter())
+            .render(chunks[1], buf);
 
         let cpu_usage = system.get_global_processor_info().get_cpu_usage().round() as u16;
-        draw_progress_bar("CPU", cpu_usage, chunks[3], buf);
+        Meter {
+            label: "CPU",
+            percentage: cpu_usage,
+            value_style,
+        }
+        .render(chunks[3], buf);
+
         let mem_usage = (100 * system.get_used_memory() / system.get_total_memory()) as u16;
-        draw_progress_bar("Memory", mem_usage, chunks[4], buf);
+        Meter {
+            label: "Memory",
+            percentage: mem_usage,
+            value_style,
+        }
+        .render(chunks[4], buf);
     }
 }

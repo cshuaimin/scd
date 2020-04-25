@@ -153,6 +153,10 @@ impl App {
                             self.shell.cd(&self.file_view_state.dir)?;
                         }
                     }
+                    Key::Char('.') => {
+                        self.file_view_state.show_hidden_files = !self.file_view_state.show_hidden_files;
+                        self.file_view_state.read_dir()?;
+                    }
                     Key::Char('q') => return Ok(true),
                     _ => {}
                 }

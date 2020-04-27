@@ -65,7 +65,10 @@ fn run() -> Result<()> {
                 shell::Event::ChangeDirectory(dir) => app.cd(dir)?,
                 shell::Event::Exit => break,
             },
-            Event::Key(Key::Char('q')) => break,
+            Event::Key(Key::Char('q')) => {
+                shell::deinit(app.shell_pid)?;
+                break;
+            }
             Event::Key(key) => handle_keys(&mut app, key)?,
             Event::Tick(_) => app.update_on_tick(),
         }

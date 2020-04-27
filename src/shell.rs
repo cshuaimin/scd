@@ -32,7 +32,7 @@ pub enum Event {
 }
 
 /// Send a command to the shell and notify it via SIGUSR1.
-fn send_command(cmd: String, pid: i32) -> Result<()> {
+fn send_command(cmd: impl AsRef<[u8]>, pid: i32) -> Result<()> {
     let pid = Pid::from_raw(pid);
     kill(pid, Signal::SIGUSR1).with_context(|| "Failed to notify the shell")?;
     fs::write(CMDS_TO_RUN, cmd).with_context(|| "Failed to send command to shell")
@@ -101,6 +101,10 @@ pub fn open_file(file: &FileInfo, app: &App) -> Result<()> {
     run(open_cmd, &[file.path.to_str().unwrap()], app.shell_pid)
 }
 
+pub fn deinit(pid: i32) -> Result<()> {
+    send_command(FISH_DEINIT, pid)
+}
+
 pub const FISH_INIT: &str = r#"
 function __eval_cmd --on-signal SIGUSR1
     eval (scd get-cmd)
@@ -116,4 +120,8 @@ end
 
 scd send-pid $fish_pid
 __scd_cd
+"#;
+
+pub const FISH_DEINIT: &str = r#"
+functions --erase __eval_cmd __scd_cd __scd_exit
 "#;

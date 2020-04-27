@@ -124,11 +124,13 @@ impl App {
     }
 
     pub fn cd(&mut self, dir: PathBuf) -> Result<()> {
-        self.watcher.unwatch(&self.dir)?;
-        self.dir = dir;
-        self.refresh_directory()?;
-        self.select_first();
-        self.watcher.watch(&self.dir, RecursiveMode::NonRecursive)?;
+        if dir != self.dir {
+            self.watcher.unwatch(&self.dir)?;
+            self.dir = dir;
+            self.refresh_directory()?;
+            self.select_first();
+            self.watcher.watch(&self.dir, RecursiveMode::NonRecursive)?;
+        }
         Ok(())
     }
 

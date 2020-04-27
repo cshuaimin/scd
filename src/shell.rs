@@ -33,9 +33,12 @@ pub enum Event {
 
 /// Send a command to the shell and notify it via SIGUSR1.
 fn send_command(cmd: impl AsRef<[u8]>, pid: i32) -> Result<()> {
-    let pid = Pid::from_raw(pid);
-    kill(pid, Signal::SIGUSR1).with_context(|| "Failed to notify the shell")?;
-    fs::write(CMDS_TO_RUN, cmd).with_context(|| "Failed to send command to shell")
+    if pid > 0 {
+        let pid = Pid::from_raw(pid);
+        kill(pid, Signal::SIGUSR1).with_context(|| "Failed to notify the shell")?;
+        fs::write(CMDS_TO_RUN, cmd).with_context(|| "Failed to send command to shell")?;
+    }
+    Ok(())
 }
 
 /// Receive a shell command to run.
@@ -65,28 +68,22 @@ pub fn receive_event() -> Result<Event> {
 ///
 /// The command will be shown in the terminal, as if typed by user.
 pub fn run(cmd: &str, args: &[impl AsRef<str>], pid: i32) -> Result<()> {
-    if pid > 0 {
-        let args = args
-            .into_iter()
-            .map(|a| format!("'{}'", a.as_ref()))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let cmd = match cmd.contains("{}") {
-            true => cmd.replace("{}", &args),
-            false => format!("{} {}", cmd, args),
-        };
-        let cmd = format!("commandline '{}' && commandline -f execute", cmd);
-        send_command(cmd, pid)?;
-    }
-    Ok(())
+    let args = args
+        .into_iter()
+        .map(|a| format!("'{}'", a.as_ref()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cmd = match cmd.contains("{}") {
+        true => cmd.replace("{}", &args),
+        false => format!("{} {}", cmd, args),
+    };
+    let cmd = format!("commandline '{}' && commandline -f execute", cmd);
+    send_command(cmd, pid)
 }
 
 pub fn cd(dir: &Path, pid: i32) -> Result<()> {
-    if pid > 0 {
-        let cmd = format!("cd '{}' && commandline -f repaint", dir.to_str().unwrap());
-        send_command(cmd, pid)?;
-    }
-    Ok(())
+    let cmd = format!("cd '{}' && commandline -f repaint", dir.to_str().unwrap());
+    send_command(cmd, pid)
 }
 
 pub fn open_file(file: &FileInfo, app: &App) -> Result<()> {
@@ -98,7 +95,7 @@ pub fn open_file(file: &FileInfo, app: &App) -> Result<()> {
             .map(String::as_str)
             .unwrap_or("xdg-open"),
     };
-    run(open_cmd, &[file.path.to_str().unwrap()], app.shell_pid)
+    run(open_cmd, &[&file.name], app.shell_pid)
 }
 
 pub fn deinit(pid: i32) -> Result<()> {

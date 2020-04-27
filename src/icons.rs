@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::*;
+use crate::FileInfo;
 
 pub struct Icons {
     directory: &'static str,
@@ -41,16 +41,13 @@ impl Icons {
     }
 
     pub fn get(&self, file: &FileInfo) -> &'static str {
-        if file.file_type == FileType::Directory {
+        if file.metadata.is_dir() {
             return self.directory;
         }
 
-        match file.path.extension() {
+        match &file.extension {
             None => self.file,
-            Some(ext) => self
-                .from_extension
-                .get(ext.to_str().unwrap())
-                .unwrap_or(&self.file),
+            Some(ext) => self.from_extension.get(ext.as_str()).unwrap_or(&self.file),
         }
     }
 }

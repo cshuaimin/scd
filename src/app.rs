@@ -1,219 +1,189 @@
+use std::cmp;
+use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::env;
+use std::fs::{self, DirEntry, Metadata};
 use std::io;
+use std::mem;
 use std::path::PathBuf;
-use std::thread;
-use std::time::{Duration, Instant};
 
-use anyhow::Result;
-use crossbeam_channel::{bounded, select, tick, Receiver};
+use anyhow::{Context, Result};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use sysinfo::{System, SystemExt};
-use termion::input::MouseTerminal;
-use termion::raw::IntoRawMode;
-use termion::{event::Key, input::TermRead};
-use tui::backend::TermionBackend;
-use tui::layout::{Constraint, Direction, Layout};
-use tui::{backend::Backend, Terminal};
+use sysinfo::{RefreshKind, System, SystemExt};
+use tui::widgets::ListState;
 
-use crate::widgets::*;
+use crate::icons::Icons;
+use crate::shell::*;
 
+#[derive(Debug, Clone)]
+pub struct FileInfo {
+    pub path: PathBuf,
+    pub name: String,
+    pub extension: Option<String>,
+    pub metadata: Metadata,
+}
+
+impl TryFrom<DirEntry> for FileInfo {
+    type Error = io::Error;
+
+    fn try_from(entry: DirEntry) -> Result<Self, Self::Error> {
+        let path = entry.path();
+        let name = entry.file_name().to_str().unwrap().to_owned();
+        let extension = path.extension().map(|e| e.to_str().unwrap().to_owned());
+        Ok(Self {
+            path,
+            name,
+            extension,
+            metadata: entry.metadata()?,
+        })
+    }
+}
+
+/// App contains all the state of the application.
 pub struct App {
-    watcher: RecommendedWatcher,
-    file_view_state: FileViewState,
-    shell: Shell,
-    system: System,
-
-    watch_rx: Receiver<notify::Event>,
-    key_rx: Receiver<Key>,
-    shell_rx: Receiver<ShellEvent>,
-    tick: Receiver<Instant>,
+    // file manager states
+    pub dir: PathBuf,
+    pub all_files: Vec<FileInfo>,
+    // filtered files
+    pub files: Vec<FileInfo>,
+    pub files_marked: Vec<PathBuf>,
+    pub filter: String,
+    pub show_hidden: bool,
+    pub icons: Icons,
+    pub list_state: ListState,
+    pub watcher: RecommendedWatcher,
+    pub shell_pid: i32,
+    pub open_methods: HashMap<String, String>,
+    // system monitor states
+    pub system: System,
 }
 
 impl App {
-    pub fn new() -> Result<Self> {
-        let (watch_tx, watch_rx) = bounded(0);
-        let watcher =
-            RecommendedWatcher::new_immediate(move |res: notify::Result<notify::Event>| {
-                watch_tx.send(res.unwrap()).unwrap();
+    pub fn new(watcher: RecommendedWatcher) -> Result<Self> {
+        let open_methods = {
+            let buf = fs::read_to_string(OPEN_METHODS_CONFIG).with_context(|| {
+                format!("Failed to read open methods from {}", OPEN_METHODS_CONFIG)
             })?;
-
-        let (key_tx, key_rx) = bounded(0);
-        thread::spawn(move || {
-            let keys = io::stdin().keys();
-            for key in keys {
-                key_tx.send(key.unwrap()).unwrap();
+            let raw: HashMap<String, String> = serde_yaml::from_str(&buf)
+                .with_context(|| format!("Failed to parse config file {}", OPEN_METHODS_CONFIG))?;
+            let mut res = HashMap::new();
+            for (exts, cmd) in raw {
+                for ext in exts.split(',').map(str::trim) {
+                    res.insert(ext.to_string(), cmd.clone());
+                }
             }
-        });
-
-        let (shell_tx, shell_rx) = bounded(0);
-        let shell = Shell::new(shell_tx)?;
-
-        let tick = tick(Duration::from_secs(2));
-
-        let file_view_state = FileViewState::new();
-        let mut system = System::new_all();
-        system.refresh_cpu();
-        system.refresh_memory();
+            res
+        };
+        let system = System::new_with_specifics(RefreshKind::new().with_cpu().with_memory());
 
         let mut app = Self {
+            dir: env::current_dir()?,
+            all_files: vec![],
+            files: vec![],
+            files_marked: vec![],
+            filter: String::new(),
+            show_hidden: false,
+            icons: Icons::new(),
+            list_state: ListState::default(),
             watcher,
-            file_view_state,
-            shell,
+            shell_pid: 0,
+            open_methods,
             system,
-
-            watch_rx,
-            key_rx,
-            shell_rx,
-            tick,
         };
-        app.enter_directory(env::current_dir()?)?;
+        app.refresh_directory()?;
+        app.select_first();
+        app.watcher.watch(&app.dir, RecursiveMode::NonRecursive)?;
 
         Ok(app)
     }
 
-    fn enter_directory(&mut self, dir: PathBuf) -> Result<()> {
-        if self.file_view_state.dir != PathBuf::new() {
-            self.watcher.unwatch(&self.file_view_state.dir)?;
+    pub fn refresh_directory(&mut self) -> Result<()> {
+        self.all_files.clear();
+        for entry in fs::read_dir(&self.dir)? {
+            self.all_files.push(FileInfo::try_from(entry?)?);
         }
-        self.file_view_state.dir = dir;
-        self.file_view_state.read_dir()?;
-        if self.file_view_state.filtered_files.len() > 0 {
-            self.file_view_state.list_state.select(Some(0));
-        }
-        self.watcher
-            .watch(&self.file_view_state.dir, RecursiveMode::NonRecursive)?;
+        self.all_files
+            .sort_unstable_by(|a, b| match (a.metadata.is_dir(), b.metadata.is_dir()) {
+                (true, false) => cmp::Ordering::Less,
+                (false, true) => cmp::Ordering::Greater,
+                _ => a.name.cmp(&b.name),
+            });
+        self.filter_files();
+
         Ok(())
     }
 
-    fn marked_files(&self) -> Vec<&str> {
-        self.file_view_state
-            .marked_files
+    pub fn filter_files(&mut self) {
+        self.files = self
+            .all_files
             .iter()
-            .map(|path| {
-                if path.parent().unwrap() == self.file_view_state.dir {
-                    path.file_name().unwrap().to_str().unwrap()
+            .filter(|f| self.show_hidden || !f.name.starts_with('.'))
+            .filter(|f| f.name.contains(&self.filter))
+            .cloned()
+            .collect();
+    }
+
+    pub fn cd(&mut self, dir: PathBuf) -> Result<()> {
+        self.watcher.unwatch(&self.dir)?;
+        self.dir = dir;
+        self.refresh_directory()?;
+        self.select_first();
+        self.watcher.watch(&self.dir, RecursiveMode::NonRecursive)?;
+        Ok(())
+    }
+
+    pub fn files_marked(&mut self) -> Vec<String> {
+        let mut marked = vec![];
+        mem::swap(&mut self.files_marked, &mut marked);
+        marked
+            .iter()
+            .map(|p| {
+                if p.parent().unwrap() == self.dir {
+                    p.file_name().unwrap().to_str().unwrap()
                 } else {
-                    path.to_str().unwrap()
+                    p.to_str().unwrap()
                 }
             })
+            .map(|s| s.to_string())
             .collect()
     }
 
-    pub fn draw<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> io::Result<()> {
-        terminal.draw(|mut frame| {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                // .horizontal_margin(1)
-                .constraints([Constraint::Length(9), Constraint::Min(0)].as_ref())
-                .split(frame.size());
-            frame.render_stateful_widget(SystemMonitor, chunks[0], &mut self.system);
-            frame.render_stateful_widget(FileView, chunks[1], &mut self.file_view_state);
-        })
+    pub fn update_on_tick(&mut self) {
+        self.system.refresh_cpu();
+        self.system.refresh_memory();
     }
 
-    pub fn handle_event(&mut self) -> Result<bool> {
-        select! {
-            recv(self.tick) -> _tick => {
-                self.system.refresh_cpu();
-                self.system.refresh_memory();
-            }
-            recv(self.watch_rx) -> _watch => self.file_view_state.read_dir()?,
-            recv(self.shell_rx) -> shell_event => {
-                match shell_event? {
-                    ShellEvent::ChangeDirectory(dir) => {
-                        if dir != self.file_view_state.dir {
-                            self.enter_directory(dir)?;
-                        }
-                    }
-                    ShellEvent::Exit => return Ok(true),
-                    _ => {}
-                }
-            }
-            recv(self.key_rx) -> key => {
-                match key? {
-                    Key::Char('j') | Key::Down => self.file_view_state.select_next(),
-                    Key::Char('k') | Key::Up => self.file_view_state.select_prev(),
-                    Key::Char('g') | Key::Home => self.file_view_state.select_first(),
-                    Key::Char('G') | Key::End => self.file_view_state.select_last(),
-                    Key::Char('l') | Key::Char('\n') => {
-                        if let Some(selected) = self.file_view_state.selected() {
-                            if selected.file_type == FileType::Directory {
-                                let dir = selected.path.clone();
-                                self.enter_directory(dir)?;
-                                self.shell.cd(&self.file_view_state.dir)?;
-                            } else {
-                                self.shell.open_file(&selected)?;
-                            }
-                        }
-                    }
-                    Key::Char('h') | Key::Esc => {
-                        if let Some(parent) = self.file_view_state.dir.parent() {
-                            let parent = parent.to_owned();
-                            let current_dir_name = self
-                                .file_view_state
-                                .dir
-                                .file_name()
-                                .unwrap()
-                                .to_str()
-                                .unwrap()
-                                .to_owned();
-                            self.enter_directory(parent)?;
-                            let index = self
-                                .file_view_state
-                                .files
-                                .iter()
-                                .position(|file| file.name == current_dir_name);
-                            self.file_view_state.list_state.select(index);
-                            self.shell.cd(&self.file_view_state.dir)?;
-                        }
-                    }
-                    Key::Char('.') => {
-                        self.file_view_state.show_hidden_files = !self.file_view_state.show_hidden_files;
-                    }
-                    Key::Char(' ') => {
-                        if let Some(selected) = self.file_view_state.selected() {
-                            if let Some(idx) = self.file_view_state.marked_files.iter().position(|p| p == &selected.path) {
-                                self.file_view_state.marked_files.remove(idx);
-                            } else {
-                                let path = selected.path.clone();
-                                self.file_view_state.marked_files.push(path);
-                            }
-                            self.file_view_state.select_next();
-                        }
-                    }
-                    Key::Char('p') => {
-                        self.shell.run("cp -r {} .", &self.marked_files())?;
-                    }
-                    Key::Char('m') => {
-                        self.shell.run("mv {} .", &self.marked_files())?;
-                    }
-                    Key::Char('q') => return Ok(true),
-                    _ => {}
-                }
-            }
-        }
-        Ok(false)
+    pub fn selected(&self) -> Option<&FileInfo> {
+        self.list_state.selected().map(|index| &self.files[index])
     }
-}
 
-pub fn run() -> Result<()> {
-    let mut terminal = {
-        let stdout = io::stdout().into_raw_mode()?;
-        let stdout = MouseTerminal::from(stdout);
-        // let stdout = AlternateScreen::from(stdout);
-        let backend = TermionBackend::new(stdout);
-        Terminal::new(backend)?
-    };
-    terminal.hide_cursor()?;
-    terminal.clear()?;
-
-    let mut app = App::new()?;
-    loop {
-        app.draw(&mut terminal)?;
-        let exit = app.handle_event()?;
-        if exit {
-            break;
-        }
+    pub fn select_first(&mut self) {
+        let index = if self.files.len() == 0 { None } else { Some(0) };
+        self.list_state.select(index);
     }
-    Ok(())
+
+    pub fn select_last(&mut self) {
+        let index = match self.files.len() {
+            0 => None,
+            len => Some(len - 1),
+        };
+        self.list_state.select(index);
+    }
+
+    pub fn select_next(&mut self) {
+        let index = match self.list_state.selected() {
+            None => 0,
+            Some(i) => (i + 1) % self.files.len(),
+        };
+        self.list_state.select(Some(index));
+    }
+
+    pub fn select_prev(&mut self) {
+        let index = match self.list_state.selected() {
+            None => 0,
+            Some(0) => self.files.len() - 1,
+            Some(i) => i - 1,
+        };
+        self.list_state.select(Some(index));
+    }
 }

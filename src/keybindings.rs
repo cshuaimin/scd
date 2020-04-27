@@ -54,7 +54,7 @@ pub fn handle_keys(app: &mut App, key: Key) -> Result<()> {
             }
         }
         Key::Char('p') => shell::run("cp -r {} .", &app.files_marked(), app.shell_pid)?,
-        Key::Char('m') => shell::run("mv -r {} .", &app.files_marked(), app.shell_pid)?,
+        Key::Char('m') => shell::run("mv {} .", &app.files_marked(), app.shell_pid)?,
         _ => {}
     }
     Ok(())

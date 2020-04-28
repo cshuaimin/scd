@@ -112,7 +112,7 @@ impl App {
             all_files: vec![],
             files: vec![],
             files_marked: vec![],
-            filter: String::new(),
+            filter: "".to_string(),
             show_hidden: false,
             icons: Icons::new(),
             list_state: ListState::default(),
@@ -140,19 +140,29 @@ impl App {
                 (false, true) => cmp::Ordering::Greater,
                 _ => a.name.cmp(&b.name),
             });
-        self.filter_files();
+        self.apply_filter();
 
         Ok(())
     }
 
-    pub fn filter_files(&mut self) {
+    pub fn apply_filter(&mut self) {
         self.files = self
             .all_files
             .iter()
             .filter(|f| self.show_hidden || !f.name.starts_with('.'))
-            .filter(|f| f.name.contains(&self.filter))
+            .filter(|f| f.name.to_lowercase().contains(&self.filter.to_lowercase()))
             .cloned()
             .collect();
+    }
+
+    pub fn change_filter(&mut self, filter: String) {
+        self.filter = filter;
+        self.apply_filter();
+        self.select_first();
+    }
+
+    pub fn clear_filter(&mut self) {
+        self.change_filter("".to_string());
     }
 
     pub fn cd(&mut self, dir: PathBuf) -> Result<()> {
@@ -195,11 +205,16 @@ impl App {
     }
 
     pub fn selected(&self) -> Option<&FileInfo> {
-        self.list_state.selected().map(|index| &self.files[index])
+        if self.files.is_empty() {
+            None
+        } else {
+            let idx = self.list_state.selected().unwrap();
+            Some(&self.files[idx])
+        }
     }
 
     pub fn select_first(&mut self) {
-        let index = if self.files.len() == 0 { None } else { Some(0) };
+        let index = if self.files.is_empty() { None } else { Some(0) };
         self.list_state.select(index);
     }
 
@@ -212,19 +227,20 @@ impl App {
     }
 
     pub fn select_next(&mut self) {
-        let index = match self.list_state.selected() {
-            None => 0,
-            Some(i) => (i + 1) % self.files.len(),
-        };
-        self.list_state.select(Some(index));
+        let index = self
+            .list_state
+            .selected()
+            .map(|i| (i + 1) % self.files.len());
+        self.list_state.select(index);
     }
 
     pub fn select_prev(&mut self) {
         let index = match self.list_state.selected() {
-            None => 0,
-            Some(0) => self.files.len() - 1,
-            Some(i) => i - 1,
+            None => None,
+            Some(0) if self.files.len() == 0 => None,
+            Some(0) => Some(self.files.len() - 1),
+            Some(i) => Some(i - 1),
         };
-        self.list_state.select(Some(index));
+        self.list_state.select(index);
     }
 }

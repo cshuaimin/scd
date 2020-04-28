@@ -45,6 +45,7 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
                 }
             }
         }
+        Key::Esc if !app.filter.is_empty() => app.clear_filter(),
         Key::Char('h') | Key::Esc => {
             if let Some(parent) = app.dir.parent() {
                 let parent = parent.to_path_buf();
@@ -58,7 +59,7 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
         Key::Char('.') => {
             let selected = app.selected().map(|f| f.name.clone());
             app.show_hidden = !app.show_hidden;
-            app.filter_files();
+            app.apply_filter();
             if let Some(name) = selected {
                 let index = app.files.iter().position(|f| f.name == name).unwrap_or(0);
                 app.list_state.select(Some(index));
@@ -130,22 +131,30 @@ fn handle_input_mode_keys(app: &mut App, key: Key) -> Result<()> {
                 shell::run("mv", &[&file.name, &input], app.shell_pid)?;
                 app.mode = Mode::Normal;
             }
-            Action::Filter => {
-                app.filter = input.clone();
-                app.filter_files();
-            }
+            Action::Filter => app.mode = Mode::Normal,
             _ => panic!(),
         },
-        Key::Esc | Key::Ctrl('[') => app.mode = Mode::Normal,
+        Key::Esc => {
+            app.mode = Mode::Normal;
+            app.clear_filter();
+        }
         Key::Backspace | Key::Ctrl('h') => {
             if *offset > 0 {
                 input.remove(*offset - 1);
                 *offset -= 1;
             }
+            if matches!(action, Action::Filter) {
+                let input = input.clone();
+                app.change_filter(input);
+            }
         }
         Key::Delete | Key::Ctrl('d') => {
             if *offset < input.len() {
                 input.remove(*offset);
+            }
+            if matches!(action, Action::Filter) {
+                let input = input.clone();
+                app.change_filter(input);
             }
         }
         Key::Left | Key::Ctrl('b') => {
@@ -161,12 +170,20 @@ fn handle_input_mode_keys(app: &mut App, key: Key) -> Result<()> {
         Key::Ctrl('u') => {
             input.clear();
             *offset = 0;
+            if matches!(action, Action::Filter) {
+                let input = input.clone();
+                app.change_filter(input);
+            }
         }
         Key::Ctrl('a') => *offset = 0,
         Key::Ctrl('e') => *offset = input.len(),
         Key::Char(ch) => {
-            input.insert(*offset as usize, ch);
+            input.insert(*offset, ch);
             *offset += 1;
+            if matches!(action, Action::Filter) {
+                let input = input.clone();
+                app.change_filter(input);
+            }
         }
         _ => {}
     }

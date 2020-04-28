@@ -240,6 +240,7 @@ pub fn draw_bottom_line<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
 where
     B: Backend,
 {
+    let prompt_style = Style::default().fg(Color::LightYellow);
     match &app.mode {
         Mode::Normal => {
             if let Some(file) = app.selected() {
@@ -256,31 +257,36 @@ where
                 );
             }
 
-            let texts = [Text::raw(format!(
-                "{} {}/{}",
-                match app.files_marked.len() {
-                    0 => "".to_string(),
-                    len => format!("M:{}", len),
-                },
+            let mut text = String::new();
+            if !app.filter.is_empty() {
+                text.push_str("F:");
+                text.push_str(&app.filter);
+            }
+            if app.files_marked.len() > 0 {
+                text.push_str(" M:");
+                text.push_str(&app.files_marked.len().to_string());
+            }
+            text.push_str(&format!(
+                " {}/{}",
                 app.list_state.selected().map(|i| i + 1).unwrap_or(0),
                 app.files.len()
-            ))];
+            ));
             frame.render_widget(
-                Paragraph::new(texts.iter()).alignment(Alignment::Right),
+                Paragraph::new([Text::raw(text)].iter()).alignment(Alignment::Right),
                 area,
             );
         }
         Mode::Message { text, .. } => {
-            let texts = [Text::styled(text, Style::default().fg(Color::LightYellow))];
+            let texts = [Text::styled(text, prompt_style)];
             frame.render_widget(Paragraph::new(texts.iter()), area);
         }
         Mode::Ask { prompt, .. } => {
-            let texts = [Text::styled(prompt, Style::default().fg(Color::LightYellow))];
+            let texts = [Text::styled(prompt, prompt_style)];
             frame.render_widget(Paragraph::new(texts.iter()), area);
         }
         Mode::Input { prompt, input, .. } => {
             let texts = [
-                Text::raw(prompt),
+                Text::styled(prompt, prompt_style),
                 Text::styled(input, Style::default().fg(Color::LightCyan)),
             ];
             frame.render_widget(Paragraph::new(texts.iter()), area);

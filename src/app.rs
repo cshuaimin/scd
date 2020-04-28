@@ -6,6 +6,7 @@ use std::fs::{self, DirEntry, Metadata};
 use std::io;
 use std::mem;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -39,13 +40,39 @@ impl TryFrom<DirEntry> for FileInfo {
     }
 }
 
+#[derive(Debug)]
+pub enum Action {
+    Delete(FileInfo),
+    Rename(FileInfo),
+    Filter,
+}
+
+#[derive(Debug)]
+pub enum Mode {
+    /// Show selected file's mode, size, etc.
+    Normal,
+
+    /// Display a short lived message.
+    Message { text: String, expire_at: Instant },
+
+    /// Ask a yes/no question.
+    Ask { prompt: String, action: Action },
+
+    /// Input some text.
+    Input {
+        prompt: String,
+        input: String,
+        offset: usize,
+        action: Action,
+    },
+}
+
 /// App contains all the state of the application.
 pub struct App {
     // file manager states
     pub dir: PathBuf,
     pub all_files: Vec<FileInfo>,
-    // filtered files
-    pub files: Vec<FileInfo>,
+    pub files: Vec<FileInfo>, // filtered
     pub files_marked: Vec<PathBuf>,
     pub filter: String,
     pub show_hidden: bool,
@@ -54,6 +81,10 @@ pub struct App {
     pub watcher: RecommendedWatcher,
     pub shell_pid: i32,
     pub open_methods: HashMap<String, String>,
+
+    // bottom input line states
+    pub mode: Mode,
+
     // system monitor states
     pub system: System,
 }
@@ -88,6 +119,7 @@ impl App {
             watcher,
             shell_pid: 0,
             open_methods,
+            mode: Mode::Normal,
             system,
         };
         app.refresh_directory()?;
@@ -153,6 +185,13 @@ impl App {
     pub fn update_on_tick(&mut self) {
         self.system.refresh_cpu();
         self.system.refresh_memory();
+    }
+
+    pub fn show_message(&mut self, text: &str) {
+        self.mode = Mode::Message {
+            text: text.to_string(),
+            expire_at: Instant::now() + Duration::from_secs(3),
+        };
     }
 
     pub fn selected(&self) -> Option<&FileInfo> {

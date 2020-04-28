@@ -3,31 +3,12 @@ use std::os::unix::fs::PermissionsExt;
 use sysinfo::{ProcessorExt, SystemExt};
 use tui::backend::Backend;
 use tui::buffer::Buffer;
-use tui::layout::{Constraint, Direction, Layout, Rect};
+use tui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Modifier, Style};
 use tui::widgets::{List, Paragraph, Text, Widget};
 use tui::Frame;
 
-use crate::App;
-
-pub fn draw_ui<B>(frame: &mut Frame<B>, app: &mut App)
-where
-    B: Backend,
-{
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(
-            [
-                Constraint::Length(9),
-                Constraint::Min(0),
-                Constraint::Length(1),
-            ]
-            .as_ref(),
-        )
-        .split(frame.size());
-    draw_system_monitor(frame, app, chunks[0]);
-    draw_file_manager(frame, app, chunks[1]);
-}
+use crate::app::{App, Mode};
 
 fn format_time(mut secs: u64) -> String {
     const UNITS: &[(u64, &str)] = &[
@@ -50,6 +31,40 @@ fn format_time(mut secs: u64) -> String {
     let minutes = secs / 60;
     secs %= 60;
     res.push_str(&format!("{:0>2}:{:0>2}:{:0>2}", hours, minutes, secs));
+    res
+}
+
+fn format_size(size: u64) -> String {
+    if size == 0 {
+        return "0B".to_string();
+    }
+
+    const UNITS: &[(u64, &str)] = &[
+        (1024 * 1024 * 1024 * 1024, "T"),
+        (1024 * 1024 * 1024, "G"),
+        (1024 * 1024, "M"),
+        (1024, "K"),
+        (1, "B"),
+    ];
+
+    for &(div, unit) in UNITS {
+        if size >= div {
+            return format!("{:.1}{}", size as f32 / div as f32, unit);
+        }
+    }
+    unreachable!()
+}
+
+fn strmode(mode: u32) -> String {
+    #[link(name = "bsd")]
+    extern "C" {
+        fn strmode(mode: u32, bp: *mut u8);
+    }
+    let mut res = "N".repeat(12);
+    unsafe {
+        strmode(mode, res.as_mut_ptr());
+    }
+    res.pop();
     res
 }
 
@@ -90,6 +105,26 @@ impl<'a> Widget for Meter<'a> {
             self.style,
         );
     }
+}
+
+pub fn draw_ui<B>(frame: &mut Frame<B>, app: &mut App)
+where
+    B: Backend,
+{
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Length(9),
+                Constraint::Min(0),
+                Constraint::Length(1),
+            ]
+            .as_ref(),
+        )
+        .split(frame.size());
+    draw_system_monitor(frame, app, chunks[0]);
+    draw_file_manager(frame, app, chunks[1]);
+    draw_bottom_line(frame, app, chunks[2]);
 }
 
 pub fn draw_system_monitor<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
@@ -199,4 +234,56 @@ where
         .into_iter();
     let list = List::new(items).highlight_style(Style::default().fg(Color::Black).bg(Color::Blue));
     frame.render_stateful_widget(list, chunks[1], &mut app.list_state);
+}
+
+pub fn draw_bottom_line<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
+where
+    B: Backend,
+{
+    match &app.mode {
+        Mode::Normal => {
+            if let Some(file) = app.selected() {
+                let mode = strmode(file.metadata.permissions().mode());
+                let size = format_size(file.metadata.len());
+                let texts = [
+                    Text::styled(mode, Style::default().fg(Color::LightGreen)),
+                    Text::raw(" "),
+                    Text::raw(size),
+                ];
+                frame.render_widget(
+                    Paragraph::new(texts.iter()).alignment(Alignment::Left),
+                    area,
+                );
+            }
+
+            let texts = [Text::raw(format!(
+                "{} {}/{}",
+                match app.files_marked.len() {
+                    0 => "".to_string(),
+                    len => format!("M:{}", len),
+                },
+                app.list_state.selected().map(|i| i + 1).unwrap_or(0),
+                app.files.len()
+            ))];
+            frame.render_widget(
+                Paragraph::new(texts.iter()).alignment(Alignment::Right),
+                area,
+            );
+        }
+        Mode::Message { text, .. } => {
+            let texts = [Text::styled(text, Style::default().fg(Color::LightYellow))];
+            frame.render_widget(Paragraph::new(texts.iter()), area);
+        }
+        Mode::Ask { prompt, .. } => {
+            let texts = [Text::styled(prompt, Style::default().fg(Color::LightYellow))];
+            frame.render_widget(Paragraph::new(texts.iter()), area);
+        }
+        Mode::Input { prompt, input, .. } => {
+            let texts = [
+                Text::raw(prompt),
+                Text::styled(input, Style::default().fg(Color::LightCyan)),
+            ];
+            frame.render_widget(Paragraph::new(texts.iter()), area);
+        }
+    }
 }

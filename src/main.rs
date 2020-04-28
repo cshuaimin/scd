@@ -14,13 +14,13 @@ use tui::Terminal;
 use app::*;
 use draw::*;
 use event::*;
-use keybindings::*;
+use handlers::*;
 
 mod app;
 mod draw;
 mod event;
+mod handlers;
 mod icons;
-mod keybindings;
 mod shell;
 
 #[derive(Debug, StructOpt)]
@@ -47,7 +47,6 @@ fn run() -> Result<()> {
         let backend = TermionBackend::new(stdout);
         Terminal::new(backend)?
     };
-    terminal.hide_cursor()?;
     terminal.clear()?;
 
     let (events, watcher) = Events::new()?;
@@ -57,6 +56,16 @@ fn run() -> Result<()> {
         terminal.draw(|mut frame| {
             draw_ui(&mut frame, &mut app);
         })?;
+        match &app.mode {
+            app::Mode::Input { prompt, offset, .. } => {
+                terminal.set_cursor(
+                    (prompt.len() + offset) as u16,
+                    terminal.size()?.bottom() - 1,
+                )?;
+                terminal.show_cursor()?;
+            }
+            _ => terminal.hide_cursor()?,
+        }
 
         match events.next()? {
             Event::Watch(_) => app.refresh_directory()?,
@@ -65,12 +74,12 @@ fn run() -> Result<()> {
                 shell::Event::ChangeDirectory(dir) => app.cd(dir)?,
                 shell::Event::Exit => break,
             },
-            Event::Key(Key::Char('q')) => {
+            Event::Key(Key::Char('q')) if matches!(app.mode, app::Mode::Normal) => {
                 shell::deinit(app.shell_pid)?;
                 break;
             }
             Event::Key(key) => handle_keys(&mut app, key)?,
-            Event::Tick(_) => app.update_on_tick(),
+            Event::Tick(tick) => handle_tick(&mut app, tick),
         }
     }
 

@@ -7,6 +7,7 @@ use tui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Modifier, Style};
 use tui::widgets::{List, Paragraph, Text, Widget};
 use tui::Frame;
+use strmode::strmode;
 
 use crate::app::{App, Mode};
 
@@ -53,19 +54,6 @@ fn format_size(size: u64) -> String {
         }
     }
     unreachable!()
-}
-
-fn strmode(mode: u32) -> String {
-    #[link(name = "bsd")]
-    extern "C" {
-        fn strmode(mode: u32, bp: *mut u8);
-    }
-    let mut res = "N".repeat(12);
-    unsafe {
-        strmode(mode, res.as_mut_ptr());
-    }
-    res.pop();
-    res
 }
 
 struct Meter<'a> {

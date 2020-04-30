@@ -191,8 +191,8 @@ fn handle_input_mode_keys(app: &mut App, key: Key) -> Result<()> {
                 app.apply_filter();
             }
         }
-        Key::Ctrl('a') => *offset = 0,
-        Key::Ctrl('e') => *offset = input.len(),
+        Key::Ctrl('a') | Key::Home => *offset = 0,
+        Key::Ctrl('e') | Key::End => *offset = input.len(),
         Key::Char(ch) => {
             input.insert(*offset, ch);
             *offset += 1;

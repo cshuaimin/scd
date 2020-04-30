@@ -1,8 +1,14 @@
 [package]
 name = "scd"
 version = "0.1.0"
-authors = ["Chen Shuaimin <chen_shuaimin@outlook.com>"]
 edition = "2018"
+authors = ["Chen Shuaimin <chen_shuaimin@outlook.com>"]
+description = "A tiny file manager focused on shell integration"
+readme = "README.md"
+homepage = "https://github.com/cshuaimin/scd"
+repository = "https://github.com/cshuaimin/scd"
+keywords = ["cli", "file-manager"]
+categories = ["command-line-utilities"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

@@ -16,8 +16,6 @@ pub const CMDS_TO_RUN: &str = "/tmp/scd-cmds-to-run";
 /// Send `ShellEvent` from the shell to scd.
 pub const SHELL_EVENTS: &str = "/tmp/scd-shell-events";
 
-pub const OPEN_METHODS_CONFIG: &str = "open-methods.yml";
-
 /// Events emitted from the shell.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Event {
@@ -77,7 +75,7 @@ pub fn run(cmd: &str, args: &[impl AsRef<str>], pid: i32) -> Result<()> {
         true => cmd.replace("{}", &args),
         false => format!("{} {}", cmd, args),
     };
-    let cmd = format!("commandline '{}' && commandline -f execute", cmd);
+    let cmd = format!("commandline \"{}\" && commandline -f execute", cmd);
     send_command(cmd, pid)
 }
 

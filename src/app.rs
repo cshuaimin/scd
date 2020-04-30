@@ -5,16 +5,15 @@ use std::env;
 use std::fs::{self, DirEntry, Metadata};
 use std::io;
 use std::mem;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use sysinfo::{RefreshKind, System, SystemExt};
 use tui::widgets::ListState;
 
 use crate::icons::Icons;
-use crate::shell::*;
 
 #[derive(Debug, Clone)]
 pub struct FileInfo {
@@ -91,22 +90,6 @@ pub struct App {
 
 impl App {
     pub fn new(watcher: RecommendedWatcher) -> Result<Self> {
-        let open_methods = {
-            let buf = fs::read_to_string(OPEN_METHODS_CONFIG).with_context(|| {
-                format!("Failed to read open methods from {}", OPEN_METHODS_CONFIG)
-            })?;
-            let raw: HashMap<String, String> = serde_yaml::from_str(&buf)
-                .with_context(|| format!("Failed to parse config file {}", OPEN_METHODS_CONFIG))?;
-            let mut res = HashMap::new();
-            for (exts, cmd) in raw {
-                for ext in exts.split(',').map(str::trim) {
-                    res.insert(ext.to_string(), cmd.clone());
-                }
-            }
-            res
-        };
-        let system = System::new_with_specifics(RefreshKind::new().with_cpu().with_memory());
-
         let mut app = Self {
             dir: env::current_dir()?,
             all_files: vec![],
@@ -118,9 +101,9 @@ impl App {
             list_state: ListState::default(),
             watcher,
             shell_pid: 0,
-            open_methods,
+            open_methods: get_open_methods()?,
             mode: Mode::Normal,
-            system,
+            system: System::new_with_specifics(RefreshKind::new().with_cpu().with_memory()),
         };
         app.refresh_directory()?;
         app.select_first();
@@ -244,4 +227,23 @@ impl App {
         };
         self.list_state.select(index);
     }
+}
+
+fn get_open_methods() -> Result<HashMap<String, String>> {
+    let config = &env::var("HOME")?;
+    let config = Path::new(&config);
+    let config = config.join(".config/scd/open.yml");
+    let mut res = HashMap::new();
+    match fs::read_to_string(config) {
+        Ok(buf) => {
+            let raw: HashMap<String, String> = serde_yaml::from_str(&buf)?;
+            for (exts, cmd) in raw {
+                for ext in exts.split(',').map(str::trim) {
+                    res.insert(ext.to_string(), cmd.clone());
+                }
+            }
+        }
+        Err(_) => {} // fall back to xdg-open
+    }
+    Ok(res)
 }

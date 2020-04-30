@@ -5,6 +5,7 @@ edition = "2018"
 authors = ["Chen Shuaimin <chen_shuaimin@outlook.com>"]
 description = "A tiny file manager focused on shell integration"
 readme = "README.md"
+license = "MIT"
 homepage = "https://github.com/cshuaimin/scd"
 repository = "https://github.com/cshuaimin/scd"
 keywords = ["cli", "file-manager"]

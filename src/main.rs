@@ -23,6 +23,7 @@ mod handlers;
 mod icons;
 mod shell;
 
+/// A tiny file manager focused on shell integration
 #[derive(Debug, StructOpt)]
 struct Opt {
     #[structopt(subcommand)]
@@ -39,8 +40,8 @@ enum Command {
 }
 
 fn run() -> Result<()> {
-    let _ = mkfifo(shell::CMDS_TO_RUN, Mode::S_IRWXU);
-    let _ = mkfifo(shell::SHELL_EVENTS, Mode::S_IRWXU);
+    mkfifo(shell::CMDS_TO_RUN, Mode::S_IRWXU)?;
+    mkfifo(shell::SHELL_EVENTS, Mode::S_IRWXU)?;
 
     let mut terminal = {
         let stdout = io::stdout().into_raw_mode()?;

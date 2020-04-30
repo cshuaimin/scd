@@ -10,6 +10,7 @@ pub fn handle_keys(app: &mut App, key: Key) -> Result<()> {
     match &mut app.mode {
         Mode::Normal => handle_normal_mode_keys(app, key)?,
         Mode::Message { .. } => {
+            // Dismiss message when any key is pressed.
             app.mode = Mode::Normal;
             handle_normal_mode_keys(app, key)?;
         }
@@ -30,8 +31,8 @@ pub fn handle_keys(app: &mut App, key: Key) -> Result<()> {
 
 fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
     match key {
-        Key::Char('j') | Key::Down => app.select_next(),
-        Key::Char('k') | Key::Up => app.select_prev(),
+        Key::Char('j') | Key::Ctrl('n') | Key::Down => app.select_next(),
+        Key::Char('k') | Key::Ctrl('p') | Key::Up => app.select_prev(),
         Key::Char('g') | Key::Home => app.select_first(),
         Key::Char('G') | Key::End => app.select_last(),
         Key::Char('l') | Key::Char('\n') => {
@@ -45,25 +46,18 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
                 }
             }
         }
-        Key::Esc if !app.filter.is_empty() => app.clear_filter(),
         Key::Char('h') | Key::Esc => {
             if let Some(parent) = app.dir.parent() {
                 let parent = parent.to_path_buf();
                 let current = app.dir.file_name().unwrap().to_str().unwrap().to_owned();
                 shell::cd(&parent, app.shell_pid)?;
                 app.cd(parent)?;
-                let index = app.files.iter().position(|f| f.name == current);
-                app.list_state.select(index);
+                app.select_file(current);
             }
         }
         Key::Char('.') => {
-            let selected = app.selected().map(|f| f.name.clone());
             app.show_hidden = !app.show_hidden;
             app.apply_filter();
-            if let Some(name) = selected {
-                let index = app.files.iter().position(|f| f.name == name).unwrap_or(0);
-                app.list_state.select(Some(index));
-            }
         }
         Key::Char(' ') => {
             if let Some(file) = app.selected() {
@@ -78,8 +72,22 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
                 }
             }
         }
-        Key::Char('p') => shell::run("cp -r {} .", &app.files_marked(), app.shell_pid)?,
-        Key::Char('m') => shell::run("mv {} .", &app.files_marked(), app.shell_pid)?,
+        Key::Char('p') => {
+            let marked = app.files_marked();
+            if marked.is_empty() {
+                app.show_message("No marked files");
+            } else {
+                shell::run("cp -r {} .", &marked, app.shell_pid)?;
+            }
+        }
+        Key::Char('m') => {
+            let marked = app.files_marked();
+            if marked.is_empty() {
+                app.show_message("No marked files");
+            } else {
+                shell::run("mv {} .", &marked, app.shell_pid)?;
+            }
+        }
         Key::Char('d') => {
             if let Some(file) = app.selected() {
                 let tp = match file.metadata.is_dir() {
@@ -126,17 +134,24 @@ fn handle_input_mode_keys(app: &mut App, key: Key) -> Result<()> {
         _ => panic!(),
     };
     match key {
+        Key::Down | Key::Ctrl('n') => app.select_next(),
+        Key::Up | Key::Ctrl('p') => app.select_prev(),
         Key::Char('\n') => match action {
             Action::Rename(file) => {
                 shell::run("mv", &[&file.name, &input], app.shell_pid)?;
                 app.mode = Mode::Normal;
             }
-            Action::Filter => app.mode = Mode::Normal,
+            Action::Filter => {
+                app.mode = Mode::Normal;
+                app.filter.clear();
+                app.apply_filter();
+            }
             _ => panic!(),
         },
         Key::Esc => {
             app.mode = Mode::Normal;
-            app.clear_filter();
+            app.filter.clear();
+            app.apply_filter();
         }
         Key::Backspace | Key::Ctrl('h') => {
             if *offset > 0 {
@@ -145,7 +160,8 @@ fn handle_input_mode_keys(app: &mut App, key: Key) -> Result<()> {
             }
             if matches!(action, Action::Filter) {
                 let input = input.clone();
-                app.change_filter(input);
+                app.filter = input;
+                app.apply_filter();
             }
         }
         Key::Delete | Key::Ctrl('d') => {
@@ -153,8 +169,8 @@ fn handle_input_mode_keys(app: &mut App, key: Key) -> Result<()> {
                 input.remove(*offset);
             }
             if matches!(action, Action::Filter) {
-                let input = input.clone();
-                app.change_filter(input);
+                app.filter = input.clone();
+                app.apply_filter();
             }
         }
         Key::Left | Key::Ctrl('b') => {
@@ -171,8 +187,8 @@ fn handle_input_mode_keys(app: &mut App, key: Key) -> Result<()> {
             input.clear();
             *offset = 0;
             if matches!(action, Action::Filter) {
-                let input = input.clone();
-                app.change_filter(input);
+                app.filter = input.clone();
+                app.apply_filter();
             }
         }
         Key::Ctrl('a') => *offset = 0,
@@ -181,8 +197,8 @@ fn handle_input_mode_keys(app: &mut App, key: Key) -> Result<()> {
             input.insert(*offset, ch);
             *offset += 1;
             if matches!(action, Action::Filter) {
-                let input = input.clone();
-                app.change_filter(input);
+                app.filter = input.clone();
+                app.apply_filter();
             }
         }
         _ => {}

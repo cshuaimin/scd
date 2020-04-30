@@ -146,6 +146,7 @@ impl App {
     }
 
     pub fn apply_filter(&mut self) {
+        let selected = self.selected().map(|f| f.name.clone());
         self.files = self
             .all_files
             .iter()
@@ -153,16 +154,16 @@ impl App {
             .filter(|f| f.name.to_lowercase().contains(&self.filter.to_lowercase()))
             .cloned()
             .collect();
+
+        // Keep selection after filter.
+        if let Some(name) = selected {
+            self.select_file(name);
+        }
     }
 
-    pub fn change_filter(&mut self, filter: String) {
-        self.filter = filter;
-        self.apply_filter();
-        self.select_first();
-    }
-
-    pub fn clear_filter(&mut self) {
-        self.change_filter("".to_string());
+    pub fn select_file(&mut self, name: String) {
+        let index = self.files.iter().position(|f| f.name == name).unwrap_or(0);
+        self.list_state.select(Some(index));
     }
 
     pub fn cd(&mut self, dir: PathBuf) -> Result<()> {

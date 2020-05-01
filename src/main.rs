@@ -40,8 +40,8 @@ enum Command {
 }
 
 fn run() -> Result<()> {
-    mkfifo(shell::CMDS_TO_RUN, Mode::S_IRWXU)?;
-    mkfifo(shell::SHELL_EVENTS, Mode::S_IRWXU)?;
+    let _ = mkfifo(shell::CMDS_TO_RUN, Mode::S_IRWXU);
+    let _ = mkfifo(shell::SHELL_EVENTS, Mode::S_IRWXU);
 
     let mut terminal = {
         let stdout = io::stdout().into_raw_mode()?;

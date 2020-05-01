@@ -91,7 +91,7 @@ pub struct App {
 impl App {
     pub fn new(watcher: RecommendedWatcher) -> Result<Self> {
         let mut app = Self {
-            dir: env::current_dir()?,
+            dir: PathBuf::new(),
             all_files: vec![],
             files: vec![],
             files_marked: vec![],
@@ -105,27 +105,22 @@ impl App {
             mode: Mode::Normal,
             system: System::new_with_specifics(RefreshKind::new().with_cpu().with_memory()),
         };
-        app.refresh_directory()?;
-        app.select_first();
-        app.watcher.watch(&app.dir, RecursiveMode::NonRecursive)?;
+        app.cd(env::current_dir()?)?;
 
         Ok(app)
     }
 
-    pub fn refresh_directory(&mut self) -> Result<()> {
-        self.all_files.clear();
+    pub fn read_dir(&self) -> io::Result<Vec<FileInfo>> {
+        let mut res = vec![];
         for entry in fs::read_dir(&self.dir)? {
-            self.all_files.push(FileInfo::try_from(entry?)?);
+            res.push(FileInfo::try_from(entry?)?);
         }
-        self.all_files
-            .sort_unstable_by(|a, b| match (a.metadata.is_dir(), b.metadata.is_dir()) {
-                (true, false) => cmp::Ordering::Less,
-                (false, true) => cmp::Ordering::Greater,
-                _ => a.name.cmp(&b.name),
-            });
-        self.apply_filter();
-
-        Ok(())
+        res.sort_unstable_by(|a, b| match (a.metadata.is_dir(), b.metadata.is_dir()) {
+            (true, false) => cmp::Ordering::Less,
+            (false, true) => cmp::Ordering::Greater,
+            _ => a.name.cmp(&b.name),
+        });
+        Ok(res)
     }
 
     pub fn apply_filter(&mut self) {
@@ -149,13 +144,25 @@ impl App {
         self.list_state.select(Some(index));
     }
 
-    pub fn cd(&mut self, dir: PathBuf) -> Result<()> {
+    pub fn cd(&mut self, mut dir: PathBuf) -> Result<()> {
         if dir != self.dir {
-            self.watcher.unwatch(&self.dir)?;
-            self.dir = dir;
-            self.refresh_directory()?;
-            self.select_first();
-            self.watcher.watch(&self.dir, RecursiveMode::NonRecursive)?;
+            if self.dir != Path::new("") {
+                self.watcher.unwatch(&self.dir)?;
+            }
+            mem::swap(&mut self.dir, &mut dir);
+            match self.read_dir() {
+                Ok(res) => {
+                    self.all_files = res;
+                    self.apply_filter();
+                    self.select_first();
+                    self.watcher.watch(&self.dir, RecursiveMode::NonRecursive)?;
+                }
+                Err(e) => {
+                    self.show_message(&e.to_string());
+                    self.dir = dir;
+                    self.watcher.watch(&self.dir, RecursiveMode::NonRecursive)?;
+                }
+            }
         }
         Ok(())
     }

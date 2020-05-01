@@ -69,7 +69,15 @@ fn run() -> Result<()> {
         }
 
         match events.next()? {
-            Event::Watch(_) => app.refresh_directory()?,
+            Event::Watch(_) => match app.read_dir() {
+                Ok(res) => {
+                    app.all_files = res;
+                    app.apply_filter();
+                }
+                Err(e) => {
+                    app.show_message(&e.to_string());
+                }
+            },
             Event::Shell(shell_event) => match shell_event {
                 shell::Event::Pid(pid) => app.shell_pid = pid,
                 shell::Event::ChangeDirectory(dir) => app.cd(dir)?,

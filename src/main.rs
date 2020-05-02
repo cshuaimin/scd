@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -22,6 +23,8 @@ mod event;
 mod handlers;
 mod icons;
 mod shell;
+#[cfg(test)]
+mod tests;
 
 /// A tiny file manager focused on shell integration
 #[derive(Debug, StructOpt)]
@@ -51,7 +54,7 @@ fn run() -> Result<()> {
     terminal.clear()?;
 
     let (events, watcher) = Events::new()?;
-    let mut app = App::new(watcher)?;
+    let mut app = App::new(watcher, env::current_dir()?)?;
 
     loop {
         terminal.draw(|mut frame| {

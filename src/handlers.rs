@@ -39,8 +39,9 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
             if let Some(file) = app.selected() {
                 if file.metadata.is_dir() {
                     let path = file.path.clone();
-                    shell::cd(&path, app.shell_pid)?;
-                    app.cd(path)?;
+                    if let Ok(_) = app.cd(path.clone()) {
+                        shell::cd(&path, app.shell_pid)?;
+                    }
                 } else {
                     shell::open_file(file, app)?;
                 }
@@ -50,9 +51,10 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
             if let Some(parent) = app.dir.parent() {
                 let parent = parent.to_path_buf();
                 let current = app.dir.file_name().unwrap().to_str().unwrap().to_owned();
-                shell::cd(&parent, app.shell_pid)?;
-                app.cd(parent)?;
-                app.select_file(current);
+                if let Ok(_) = app.cd(parent.clone()) {
+                    shell::cd(&parent, app.shell_pid)?;
+                    app.select_file(current);
+                }
             }
         }
         Key::Char('.') => {

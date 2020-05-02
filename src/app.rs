@@ -67,7 +67,7 @@ pub enum Mode {
 }
 
 /// App contains all the state of the application.
-pub struct App {
+pub struct App<W: Watcher = RecommendedWatcher> {
     // file manager states
     pub dir: PathBuf,
     pub all_files: Vec<FileInfo>,
@@ -77,7 +77,7 @@ pub struct App {
     pub show_hidden: bool,
     pub icons: Icons,
     pub list_state: ListState,
-    pub watcher: RecommendedWatcher,
+    pub watcher: W,
     pub shell_pid: i32,
     pub open_methods: HashMap<String, String>,
 
@@ -88,8 +88,8 @@ pub struct App {
     pub system: System,
 }
 
-impl App {
-    pub fn new(watcher: RecommendedWatcher) -> Result<Self> {
+impl<W: Watcher> App<W> {
+    pub fn new(watcher: W, dir: impl Into<PathBuf>) -> Result<Self> {
         let mut app = Self {
             dir: PathBuf::new(),
             all_files: vec![],
@@ -105,7 +105,7 @@ impl App {
             mode: Mode::Normal,
             system: System::new_with_specifics(RefreshKind::new().with_cpu().with_memory()),
         };
-        app.cd(env::current_dir()?)?;
+        app.cd(dir.into())?;
 
         Ok(app)
     }
@@ -161,6 +161,7 @@ impl App {
                     self.show_message(&e.to_string());
                     self.dir = dir;
                     self.watcher.watch(&self.dir, RecursiveMode::NonRecursive)?;
+                    return Err(e.into());
                 }
             }
         }
@@ -191,7 +192,7 @@ impl App {
     pub fn show_message(&mut self, text: &str) {
         self.mode = Mode::Message {
             text: text.to_string(),
-            expire_at: Instant::now() + Duration::from_secs(3),
+            expire_at: Instant::now() + Duration::from_secs(4),
         };
     }
 

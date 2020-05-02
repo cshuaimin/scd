@@ -1,5 +1,6 @@
 use std::os::unix::fs::PermissionsExt;
 
+use strmode::strmode;
 use sysinfo::{ProcessorExt, SystemExt};
 use tui::backend::Backend;
 use tui::buffer::Buffer;
@@ -7,7 +8,6 @@ use tui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Modifier, Style};
 use tui::widgets::{List, Paragraph, Text, Widget};
 use tui::Frame;
-use strmode::strmode;
 
 use crate::app::{App, Mode};
 
@@ -207,9 +207,10 @@ where
             } else {
                 Color::White
             };
-            let is_selected = match app.files_marked.contains(&file.path) {
-                true => "+",
-                false => " ",
+            let is_selected = if app.files_marked.contains(&file.path) {
+                "+"
+            } else {
+                " "
             };
             let icon = app.icons.get(file);
             let suffix = if file.metadata.is_dir() { "/" } else { "" };
@@ -250,7 +251,7 @@ where
                 text.push_str("F:");
                 text.push_str(&app.filter);
             }
-            if app.files_marked.len() > 0 {
+            if !app.files_marked.is_empty() {
                 text.push_str(" M:");
                 text.push_str(&app.files_marked.len().to_string());
             }

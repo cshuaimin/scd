@@ -92,7 +92,8 @@ fn test_permission_denied() -> Result<()> {
 
     let mut app = App::new(NullWatcher::new_immediate(|_| {})?, temp.path())?;
     assert_eq!(app.file_names(), ["d"]);
-    app.cd(dir)?;
+
+    assert!(app.cd(dir).is_err());
     assert_eq!(app.dir, temp.path());
     assert_eq!(app.file_names(), ["d"]);
     assert!(matches!(app.mode, Mode::Message {..}));

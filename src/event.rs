@@ -50,14 +50,11 @@ impl Events {
             }
         });
 
-        thread::spawn({
-            let tx = tx.clone();
-            move || {
-                tick(Duration::from_secs(2))
-                    .into_iter()
-                    .map(Event::Tick)
-                    .for_each(|t| tx.send(t).unwrap())
-            }
+        thread::spawn(move || {
+            tick(Duration::from_secs(2))
+                .into_iter()
+                .map(Event::Tick)
+                .for_each(|t| tx.send(t).unwrap())
         });
         Ok((Self { rx }, watcher))
     }

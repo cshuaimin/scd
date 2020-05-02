@@ -41,8 +41,8 @@ impl TryFrom<DirEntry> for FileInfo {
 
 #[derive(Debug)]
 pub enum Action {
-    Delete(FileInfo),
-    Rename(FileInfo),
+    Delete(String),
+    Rename(String),
     Filter,
 }
 
@@ -229,7 +229,7 @@ impl<W: Watcher> App<W> {
     pub fn select_prev(&mut self) {
         let index = match self.list_state.selected() {
             None => None,
-            Some(0) if self.files.len() == 0 => None,
+            Some(0) if self.files.is_empty() => None,
             Some(0) => Some(self.files.len() - 1),
             Some(i) => Some(i - 1),
         };
@@ -242,16 +242,13 @@ fn get_open_methods() -> Result<HashMap<String, String>> {
     let config = Path::new(&config);
     let config = config.join(".config/scd/open.yml");
     let mut res = HashMap::new();
-    match fs::read_to_string(config) {
-        Ok(buf) => {
-            let raw: HashMap<String, String> = serde_yaml::from_str(&buf)?;
-            for (exts, cmd) in raw {
-                for ext in exts.split(',').map(str::trim) {
-                    res.insert(ext.to_string(), cmd.clone());
-                }
+    if let Ok(buf) = fs::read_to_string(config) {
+        let raw: HashMap<String, String> = serde_yaml::from_str(&buf)?;
+        for (exts, cmd) in raw {
+            for ext in exts.split(',').map(str::trim) {
+                res.insert(ext.to_string(), cmd.clone());
             }
         }
-        Err(_) => {} // fall back to xdg-open
     }
     Ok(res)
 }

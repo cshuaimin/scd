@@ -67,13 +67,14 @@ pub fn receive_event() -> Result<Event> {
 /// The command will be shown in the terminal, as if typed by user.
 pub fn run(cmd: &str, args: &[impl AsRef<str>], pid: i32) -> Result<()> {
     let args = args
-        .into_iter()
+        .iter()
         .map(|a| format!("'{}'", a.as_ref()))
         .collect::<Vec<_>>()
         .join(" ");
-    let cmd = match cmd.contains("{}") {
-        true => cmd.replace("{}", &args),
-        false => format!("{} {}", cmd, args),
+    let cmd = if cmd.contains("{}") {
+        cmd.replace("{}", &args)
+    } else {
+        format!("{} {}", cmd, args)
     };
     let cmd = format!("commandline \"{}\" && commandline -f execute", cmd);
     send_command(cmd, pid)

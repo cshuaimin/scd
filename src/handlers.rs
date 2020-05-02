@@ -15,9 +15,9 @@ pub fn handle_keys(app: &mut App, key: Key) -> Result<()> {
             handle_normal_mode_keys(app, key)?;
         }
         Mode::Ask { action, .. } => match action {
-            Action::Delete(file) => match key {
+            Action::Delete(file_name) => match key {
                 Key::Char('y') => {
-                    shell::run("rm -r", &[&file.name], app.shell_pid)?;
+                    shell::run("rm -r", &[file_name], app.shell_pid)?;
                     app.mode = Mode::Normal;
                 }
                 _ => app.mode = Mode::Normal,
@@ -39,7 +39,7 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
             if let Some(file) = app.selected() {
                 if file.metadata.is_dir() {
                     let path = file.path.clone();
-                    if let Ok(_) = app.cd(path.clone()) {
+                    if app.cd(path.clone()).is_ok() {
                         shell::cd(&path, app.shell_pid)?;
                     }
                 } else {
@@ -92,13 +92,14 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
         }
         Key::Char('d') => {
             if let Some(file) = app.selected() {
-                let tp = match file.metadata.is_dir() {
-                    true => "directory",
-                    false => "file",
+                let tp = if file.metadata.is_dir() {
+                    "directory"
+                } else {
+                    "file"
                 };
                 app.mode = Mode::Ask {
                     prompt: format!("Delete {} {}? [y/N]", tp, file.name),
-                    action: Action::Delete(file.clone()),
+                    action: Action::Delete(file.name.clone()),
                 };
             }
         }
@@ -108,7 +109,7 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
                     prompt: "Rename: ".to_string(),
                     input: file.name.clone(),
                     offset: file.name.len(),
-                    action: Action::Rename(file.clone()),
+                    action: Action::Rename(file.name.clone()),
                 };
             }
         }
@@ -139,8 +140,8 @@ fn handle_input_mode_keys(app: &mut App, key: Key) -> Result<()> {
         Key::Down | Key::Ctrl('n') => app.select_next(),
         Key::Up | Key::Ctrl('p') => app.select_prev(),
         Key::Char('\n') => match action {
-            Action::Rename(file) => {
-                shell::run("mv", &[&file.name, &input], app.shell_pid)?;
+            Action::Rename(file_name) => {
+                shell::run("mv", &[file_name, input], app.shell_pid)?;
                 app.mode = Mode::Normal;
             }
             Action::Filter => {

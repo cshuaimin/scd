@@ -41,8 +41,8 @@ impl TryFrom<DirEntry> for FileInfo {
 
 #[derive(Debug)]
 pub enum Action {
-    Delete(String),
-    Rename(String),
+    Delete(PathBuf),
+    Rename(PathBuf),
     Filter,
 }
 
@@ -166,22 +166,6 @@ impl<W: Watcher> App<W> {
             }
         }
         Ok(())
-    }
-
-    pub fn files_marked(&mut self) -> Vec<String> {
-        let mut marked = vec![];
-        mem::swap(&mut self.files_marked, &mut marked);
-        marked
-            .iter()
-            .map(|p| {
-                if p.parent().unwrap() == self.dir {
-                    p.file_name().unwrap().to_str().unwrap()
-                } else {
-                    p.to_str().unwrap()
-                }
-            })
-            .map(|s| s.to_string())
-            .collect()
     }
 
     pub fn update_on_tick(&mut self) {

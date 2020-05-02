@@ -1,3 +1,4 @@
+use std::mem;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -15,9 +16,9 @@ pub fn handle_keys(app: &mut App, key: Key) -> Result<()> {
             handle_normal_mode_keys(app, key)?;
         }
         Mode::Ask { action, .. } => match action {
-            Action::Delete(file_name) => match key {
+            Action::Delete(file) => match key {
                 Key::Char('y') => {
-                    shell::run("rm -r", &[file_name], app.shell_pid)?;
+                    shell::run("rm -r", &[file.to_str().unwrap()], app.shell_pid)?;
                     app.mode = Mode::Normal;
                 }
                 _ => app.mode = Mode::Normal,
@@ -75,19 +76,23 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
             }
         }
         Key::Char('p') => {
-            let marked = app.files_marked();
-            if marked.is_empty() {
-                app.show_message("No marked files");
+            if app.files_marked.is_empty() {
+                app.show_message("No files marked");
             } else {
-                shell::run("cp -r {} .", &marked, app.shell_pid)?;
+                let mut files = vec![];
+                mem::swap(&mut app.files_marked, &mut files);
+                let files: Vec<&str> = files.iter().map(|f| f.to_str().unwrap()).collect();
+                shell::run("cp -r {} .", &files, app.shell_pid)?;
             }
         }
         Key::Char('m') => {
-            let marked = app.files_marked();
-            if marked.is_empty() {
-                app.show_message("No marked files");
+            if app.files_marked.is_empty() {
+                app.show_message("No files marked");
             } else {
-                shell::run("mv {} .", &marked, app.shell_pid)?;
+                let mut files = vec![];
+                mem::swap(&mut app.files_marked, &mut files);
+                let files: Vec<&str> = files.iter().map(|f| f.to_str().unwrap()).collect();
+                shell::run("mv {} .", &files, app.shell_pid)?;
             }
         }
         Key::Char('d') => {
@@ -99,7 +104,7 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
                 };
                 app.mode = Mode::Ask {
                     prompt: format!("Delete {} {}? [y/N]", tp, file.name),
-                    action: Action::Delete(file.name.clone()),
+                    action: Action::Delete(file.path.clone()),
                 };
             }
         }
@@ -109,7 +114,7 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
                     prompt: "Rename: ".to_string(),
                     input: file.name.clone(),
                     offset: file.name.len(),
-                    action: Action::Rename(file.name.clone()),
+                    action: Action::Rename(file.path.clone()),
                 };
             }
         }
@@ -140,8 +145,13 @@ fn handle_input_mode_keys(app: &mut App, key: Key) -> Result<()> {
         Key::Down | Key::Ctrl('n') => app.select_next(),
         Key::Up | Key::Ctrl('p') => app.select_prev(),
         Key::Char('\n') => match action {
-            Action::Rename(file_name) => {
-                shell::run("mv", &[file_name, input], app.shell_pid)?;
+            Action::Rename(file) => {
+                let dest = file.parent().unwrap().join(input);
+                shell::run(
+                    "mv",
+                    &[file.to_str().unwrap(), dest.to_str().unwrap()],
+                    app.shell_pid,
+                )?;
                 app.mode = Mode::Normal;
             }
             Action::Filter => {

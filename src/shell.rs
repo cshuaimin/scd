@@ -6,6 +6,7 @@ use nix::sys::signal::{kill, Signal};
 use nix::sys::stat::Mode;
 use nix::unistd::mkfifo;
 use nix::unistd::Pid;
+use notify::Watcher;
 use serde::{Deserialize, Serialize};
 
 use crate::{App, FileInfo};
@@ -23,7 +24,7 @@ enum RunCommand {
 }
 
 /// Events emitted from the shell.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub enum Event {
     /// Shell PID.
     Pid(i32),
@@ -127,7 +128,7 @@ pub fn cd(dir: &Path, pid: i32) -> Result<()> {
     )
 }
 
-pub fn open_file(file: &FileInfo, app: &App) -> Result<()> {
+pub fn open_file<W: Watcher>(file: &FileInfo, app: &App<W>) -> Result<()> {
     let open_cmd = match &file.extension {
         None => "xdg-open",
         Some(ext) => app

@@ -3,11 +3,12 @@ use std::time::Instant;
 
 use anyhow::Result;
 use termion::event::Key;
+use notify::Watcher;
 
 use crate::app::{Action, App, Mode};
 use crate::shell;
 
-pub fn handle_keys(app: &mut App, key: Key) -> Result<()> {
+pub fn handle_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()> {
     match &mut app.mode {
         Mode::Normal => handle_normal_mode_keys(app, key)?,
         Mode::Message { .. } => {
@@ -30,7 +31,7 @@ pub fn handle_keys(app: &mut App, key: Key) -> Result<()> {
     Ok(())
 }
 
-fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
+fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()> {
     match key {
         Key::Char('j') | Key::Ctrl('n') | Key::Down => app.select_next(),
         Key::Char('k') | Key::Ctrl('p') | Key::Up => app.select_prev(),
@@ -131,7 +132,7 @@ fn handle_normal_mode_keys(app: &mut App, key: Key) -> Result<()> {
     Ok(())
 }
 
-fn handle_input_mode_keys(app: &mut App, key: Key) -> Result<()> {
+fn handle_input_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()> {
     let (input, offset, action) = match &mut app.mode {
         Mode::Input {
             input,
@@ -219,7 +220,7 @@ fn handle_input_mode_keys(app: &mut App, key: Key) -> Result<()> {
     Ok(())
 }
 
-pub fn handle_tick(app: &mut App, tick: Instant) {
+pub fn handle_tick<W: Watcher>(app: &mut App<W>, tick: Instant) {
     app.update_on_tick();
     if let Mode::Message { expire_at, .. } = app.mode {
         if expire_at >= tick {

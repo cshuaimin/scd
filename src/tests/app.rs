@@ -93,10 +93,15 @@ fn test_permission_denied() -> Result<()> {
     let mut app = App::new(NullWatcher::new_immediate(|_| {})?, temp.path())?;
     assert_eq!(app.file_names(), ["d"]);
 
-    assert!(app.cd(dir).is_err());
+    assert!(app.cd(dir.clone()).is_err());
     assert_eq!(app.dir, temp.path());
     assert_eq!(app.file_names(), ["d"]);
     assert!(matches!(app.mode, Mode::Message {..}));
+
+    // Restore the mode, so it can be removed.
+    let mut perm = fs::metadata(&dir)?.permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(&dir, perm)?;
 
     Ok(())
 }

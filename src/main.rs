@@ -36,7 +36,10 @@ struct Opt {
 #[derive(Debug, StructOpt)]
 enum Command {
     FishInit,
-    GetCmd,
+    ZshInit,
+    GetCmdFish,
+    GetCmdZsh,
+
     Cd { dir: PathBuf },
     SendPid { pid: i32 },
     Exit,
@@ -106,7 +109,10 @@ fn main() -> Result<()> {
         None => run()?,
         Some(command) => match command {
             Command::FishInit => println!("{}", shell::FISH_INIT),
-            Command::GetCmd => println!("{}", shell::receive_command()?),
+            Command::ZshInit => println!("{}", shell::ZSH_INIT),
+            Command::GetCmdFish => println!("{}", shell::receive_command(shell::Fish)?),
+            Command::GetCmdZsh => println!("{}", shell::receive_command(shell::Zsh)?),
+
             Command::SendPid { pid } => shell::send_event(shell::Event::Pid(pid))?,
             Command::Cd { dir } => shell::send_event(shell::Event::ChangeDirectory(dir))?,
             Command::Exit => shell::send_event(shell::Event::Exit)?,

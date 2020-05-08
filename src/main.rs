@@ -83,10 +83,16 @@ fn run() -> Result<()> {
                 shell::Event::Exit => break,
             },
             Event::Key(Key::Char('q')) if app.mode == app::Mode::Normal => {
-                shell::deinit(app.shell_pid)?;
+                if app.shell_pid > 0 {
+                    shell::deinit(app.shell_pid)?;
+                }
                 break;
             }
-            Event::Key(key) => handle_keys(&mut app, key)?,
+            Event::Key(key) => {
+                if let Err(e) = handle_keys(&mut app, key) {
+                    app.show_message(&e.to_string());
+                }
+            }
             Event::Tick(tick) => handle_tick(&mut app, tick),
         }
     }

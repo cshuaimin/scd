@@ -1,16 +1,24 @@
 use std::mem;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use notify::Watcher;
 use termion::event::Key;
 
 use crate::app::{Action, App, Mode};
 use crate::shell;
 
+macro_rules! check_pid {
+    ($pid:expr) => {
+        ensure!($pid > 0, "Shell not initialized");
+    };
+}
+
 pub fn handle_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()> {
-    match &mut app.mode {
-        Mode::Normal => handle_normal_mode_keys(app, key)?,
+    match &app.mode {
+        Mode::Normal => {
+            handle_normal_mode_keys(app, key)?;
+        }
         Mode::Message { .. } => {
             // Dismiss message when any key is pressed.
             app.mode = Mode::Normal;
@@ -19,6 +27,7 @@ pub fn handle_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()> {
         Mode::Ask { action, .. } => match action {
             Action::Delete(file) => match key {
                 Key::Char('y') => {
+                    check_pid!(app.shell_pid);
                     shell::run(app.shell_pid, "rm", &["-r", file.to_str().unwrap()], true)?;
                     app.mode = Mode::Normal;
                 }
@@ -41,10 +50,11 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
             if let Some(file) = app.selected() {
                 if file.metadata.is_dir() {
                     let path = file.path.clone();
-                    if app.cd(path.clone()).is_ok() {
+                    if app.cd(path.clone()).is_ok() && app.shell_pid > 0 {
                         shell::run(app.shell_pid, "cd", &[path.to_str().unwrap()], false)?;
                     }
                 } else {
+                    check_pid!(app.shell_pid);
                     let open_cmd = match &file.extension {
                         None => "xdg-open",
                         Some(ext) => app
@@ -63,8 +73,10 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
                 let parent = parent.to_path_buf();
                 let current = app.dir.file_name().unwrap().to_str().unwrap().to_owned();
                 if let Ok(_) = app.cd(parent.clone()) {
-                    shell::run(app.shell_pid, "cd", &[parent.to_str().unwrap()], false)?;
                     app.select_file(current);
+                    if app.shell_pid > 0 {
+                        shell::run(app.shell_pid, "cd", &[parent.to_str().unwrap()], false)?;
+                    }
                 }
             }
         }
@@ -89,6 +101,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
             if app.files_marked.is_empty() {
                 app.show_message("No files marked");
             } else {
+                check_pid!(app.shell_pid);
                 let mut files = vec![];
                 mem::swap(&mut app.files_marked, &mut files);
                 let files: Vec<&str> = files.iter().map(|f| f.to_str().unwrap()).collect();
@@ -99,6 +112,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
             if app.files_marked.is_empty() {
                 app.show_message("No files marked");
             } else {
+                check_pid!(app.shell_pid);
                 let mut files = vec![];
                 mem::swap(&mut app.files_marked, &mut files);
                 let files: Vec<&str> = files.iter().map(|f| f.to_str().unwrap()).collect();
@@ -107,6 +121,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
         }
         Key::Char('d') => {
             if let Some(file) = app.selected() {
+                check_pid!(app.shell_pid);
                 let tp = if file.metadata.is_dir() {
                     "directory"
                 } else {
@@ -120,6 +135,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
         }
         Key::Char('r') => {
             if let Some(file) = app.selected() {
+                check_pid!(app.shell_pid);
                 app.mode = Mode::Input {
                     prompt: "Rename: ".to_string(),
                     input: file.name.clone(),
@@ -156,6 +172,7 @@ fn handle_input_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()> 
         Key::Up | Key::Ctrl('p') => app.select_prev(),
         Key::Char('\n') => match action {
             Action::Rename(file) => {
+                check_pid!(app.shell_pid);
                 let dest = file.parent().unwrap().join(input);
                 shell::run(
                     app.shell_pid,

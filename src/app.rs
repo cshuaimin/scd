@@ -39,14 +39,14 @@ impl TryFrom<DirEntry> for FileInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Action {
     Delete(PathBuf),
     Rename(PathBuf),
     Filter,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Mode {
     /// Show selected file's mode, size, etc.
     Normal,

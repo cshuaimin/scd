@@ -2,8 +2,8 @@ use std::mem;
 use std::time::Instant;
 
 use anyhow::Result;
-use termion::event::Key;
 use notify::Watcher;
+use termion::event::Key;
 
 use crate::app::{Action, App, Mode};
 use crate::shell;
@@ -19,7 +19,7 @@ pub fn handle_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()> {
         Mode::Ask { action, .. } => match action {
             Action::Delete(file) => match key {
                 Key::Char('y') => {
-                    shell::run("rm -r", &[file.to_str().unwrap()], app.shell_pid)?;
+                    shell::run(app.shell_pid, "rm", &["-r", file.to_str().unwrap()], true)?;
                     app.mode = Mode::Normal;
                 }
                 _ => app.mode = Mode::Normal,
@@ -42,10 +42,19 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
                 if file.metadata.is_dir() {
                     let path = file.path.clone();
                     if app.cd(path.clone()).is_ok() {
-                        shell::cd(&path, app.shell_pid)?;
+                        shell::run(app.shell_pid, "cd", &[path.to_str().unwrap()], false)?;
                     }
                 } else {
-                    shell::open_file(file, app)?;
+                    let open_cmd = match &file.extension {
+                        None => "xdg-open",
+                        Some(ext) => app
+                            .open_methods
+                            .get(ext)
+                            .map(String::as_str)
+                            .unwrap_or("xdg-open"),
+                    };
+                    let file_name = file.name.clone();
+                    shell::run(app.shell_pid, open_cmd, &[file_name], true)?;
                 }
             }
         }
@@ -54,7 +63,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
                 let parent = parent.to_path_buf();
                 let current = app.dir.file_name().unwrap().to_str().unwrap().to_owned();
                 if let Ok(_) = app.cd(parent.clone()) {
-                    shell::cd(&parent, app.shell_pid)?;
+                    shell::run(app.shell_pid, "cd", &[parent.to_str().unwrap()], false)?;
                     app.select_file(current);
                 }
             }
@@ -83,7 +92,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
                 let mut files = vec![];
                 mem::swap(&mut app.files_marked, &mut files);
                 let files: Vec<&str> = files.iter().map(|f| f.to_str().unwrap()).collect();
-                shell::run("cp -r {} .", &files, app.shell_pid)?;
+                shell::run(app.shell_pid, "cp -r {} .", &files, true)?;
             }
         }
         Key::Char('m') => {
@@ -93,7 +102,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
                 let mut files = vec![];
                 mem::swap(&mut app.files_marked, &mut files);
                 let files: Vec<&str> = files.iter().map(|f| f.to_str().unwrap()).collect();
-                shell::run("mv {} .", &files, app.shell_pid)?;
+                shell::run(app.shell_pid, "mv {} .", &files, true)?;
             }
         }
         Key::Char('d') => {
@@ -149,9 +158,10 @@ fn handle_input_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()> 
             Action::Rename(file) => {
                 let dest = file.parent().unwrap().join(input);
                 shell::run(
+                    app.shell_pid,
                     "mv",
                     &[file.to_str().unwrap(), dest.to_str().unwrap()],
-                    app.shell_pid,
+                    true,
                 )?;
                 app.mode = Mode::Normal;
             }

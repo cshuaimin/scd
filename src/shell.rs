@@ -1,15 +1,14 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::fs::{self, File, OpenOptions};
+use std::io::prelude::*;
+use std::mem;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use nix::sys::signal::{kill, Signal};
 use nix::sys::stat::Mode;
 use nix::unistd::mkfifo;
 use nix::unistd::Pid;
-use notify::Watcher;
 use serde::{Deserialize, Serialize};
-
-use crate::{App, FileInfo};
 
 /// Send shell commands from scd to shell.
 pub const CMDS_TO_RUN: &str = "/tmp/scd-cmds-to-run";
@@ -17,10 +16,46 @@ pub const CMDS_TO_RUN: &str = "/tmp/scd-cmds-to-run";
 /// Send `ShellEvent` from the shell to scd.
 pub const SHELL_EVENTS: &str = "/tmp/scd-shell-events";
 
-#[derive(Debug, Serialize, Deserialize)]
-enum RunCommand {
-    Silently(String),
-    WithEcho(String),
+/// Run a command in the shell.
+pub fn run(pid: i32, cmd: &str, args: &[impl AsRef<str>], echo: bool) -> Result<()> {
+    let _ = mkfifo(CMDS_TO_RUN, Mode::S_IRWXU);
+    let args = args
+        .iter()
+        .map(|a| format!("'{}'", a.as_ref()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cmd = if cmd.contains("{}") {
+        cmd.replace("{}", &args)
+    } else {
+        format!("{} {}", cmd, args)
+    };
+    let cmd = if echo {
+        format!("scd_run_with_echo \"{}\"", cmd)
+    } else {
+        format!("scd_run_silently \"{}\"", cmd)
+    };
+
+    kill(Pid::from_raw(pid), Signal::SIGUSR1).with_context(|| "Failed to notify the shell")?;
+    let mut fifo = OpenOptions::new().write(true).open(CMDS_TO_RUN)?;
+    let cmd = cmd.as_bytes();
+    fifo.write_all(&cmd.len().to_ne_bytes())?;
+    fifo.write_all(cmd)?;
+    Ok(())
+}
+
+/// Receive a shell command to run.
+///
+/// This function is called on the shell side.
+pub fn receive_command() -> Result<String> {
+    let _ = mkfifo(CMDS_TO_RUN, Mode::S_IRWXU);
+    let mut file = File::open(CMDS_TO_RUN)?;
+
+    let mut len_bytes = [0; mem::size_of::<usize>()];
+    file.read_exact(&mut len_bytes)?;
+    let len = usize::from_ne_bytes(len_bytes);
+    let mut buf = vec![0; len];
+    file.read_exact(&mut buf)?;
+    Ok(String::from_utf8(buf)?)
 }
 
 /// Events emitted from the shell.
@@ -36,48 +71,6 @@ pub enum Event {
     Exit,
 }
 
-pub trait Shell {
-    fn silently(&self, cmd: String) -> String;
-    fn with_echo(&self, cmd: String) -> String;
-}
-
-pub struct Fish;
-
-impl Shell for Fish {
-    fn silently(&self, cmd: String) -> String {
-        format!("{} && commandline -f repaint", cmd)
-    }
-
-    fn with_echo(&self, cmd: String) -> String {
-        format!("commandline \"{}\" && commandline -f execute", cmd)
-    }
-}
-
-pub struct Zsh;
-
-impl Shell for Zsh {
-    fn silently(&self, cmd: String) -> String {
-        format!("{} && zle reset-prompt", cmd)
-    }
-
-    fn with_echo(&self, cmd: String) -> String {
-        // manually echo and add cmd to history
-        format!("echo {0} && {0} && print -s {0} && zle reset-prompt", cmd)
-    }
-}
-
-/// Receive a shell command to run.
-///
-/// This function is called on the shell side.
-pub fn receive_command(shell: impl Shell) -> Result<String> {
-    let _ = mkfifo(CMDS_TO_RUN, Mode::S_IRWXU);
-    let buf = fs::read_to_string(CMDS_TO_RUN).with_context(|| "Failed to receive command")?;
-    Ok(match serde_yaml::from_str(&buf)? {
-        RunCommand::Silently(cmd) => shell.silently(cmd),
-        RunCommand::WithEcho(cmd) => shell.with_echo(cmd),
-    })
-}
-
 /// Send a shell event to the file manager.
 ///
 /// This function is called on the shell side.
@@ -87,70 +80,32 @@ pub fn send_event(event: Event) -> Result<()> {
     fs::write(SHELL_EVENTS, buf).with_context(|| "Failed to send event to file manager")
 }
 
-/// Send a command to the shell and notify it via SIGUSR1.
-fn send_command(cmd: RunCommand, pid: i32) -> Result<()> {
-    if pid > 0 {
-        let pid = Pid::from_raw(pid);
-        kill(pid, Signal::SIGUSR1).with_context(|| "Failed to notify the shell")?;
-        fs::write(CMDS_TO_RUN, serde_yaml::to_string(&cmd)?)
-            .with_context(|| "Failed to send command to shell")?;
-    }
-    Ok(())
-}
-
 /// Receive a shell event.
 pub fn receive_event() -> Result<Event> {
+    let _ = mkfifo(SHELL_EVENTS, Mode::S_IRWXU);
     let buf = fs::read_to_string(SHELL_EVENTS).with_context(|| "Failed to read shell event")?;
     Ok(serde_yaml::from_str(&buf)?)
 }
 
-/// Run a command in the shell.
-///
-/// The command will be shown in the terminal, as if typed by user.
-pub fn run(cmd: &str, args: &[impl AsRef<str>], pid: i32) -> Result<()> {
-    let args = args
-        .iter()
-        .map(|a| format!("'{}'", a.as_ref()))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let cmd = if cmd.contains("{}") {
-        cmd.replace("{}", &args)
-    } else {
-        format!("{} {}", cmd, args)
-    };
-    send_command(RunCommand::WithEcho(cmd), pid)
-}
-
-pub fn cd(dir: &Path, pid: i32) -> Result<()> {
-    send_command(
-        RunCommand::Silently(format!("cd '{}'", dir.to_str().unwrap().to_string())),
-        pid,
-    )
-}
-
-pub fn open_file<W: Watcher>(file: &FileInfo, app: &App<W>) -> Result<()> {
-    let open_cmd = match &file.extension {
-        None => "xdg-open",
-        Some(ext) => app
-            .open_methods
-            .get(ext)
-            .map(String::as_str)
-            .unwrap_or("xdg-open"),
-    };
-    run(open_cmd, &[&file.name], app.shell_pid)
-}
-
 pub fn deinit(pid: i32) -> Result<()> {
-    send_command(RunCommand::Silently("scd_deinit".to_string()), pid)
+    run(pid, "scd_deinit", &[] as &[&str], false)
 }
 
 pub const FISH_INIT: &str = r#"
-function scd_run_cmd --on-signal SIGUSR1
-    eval (scd get-cmd-fish)
+function scd_eval --on-signal SIGUSR1
+    eval (scd get-cmd)
+end
+
+function scd_run_silently
+    eval $argv && commandline -f repaint
+end
+
+function scd_run_with_echo
+    commandline $argv && commandline -f execute
 end
 
 function scd_cd --on-variable PWD
-    scd cd "$PWD"
+    scd cd $PWD
 end
 
 function scd_exit --on-event fish_exit
@@ -161,17 +116,25 @@ scd send-pid $fish_pid
 scd_cd
 
 function scd_deinit
-    functions --erase scd_run_cmd scd_cd scd_exit scd_deinit
+    functions --erase scd_eval scd_run_silently scd_run_with_echo scd_cd scd_exit scd_deinit
 end
 "#;
 
 pub const ZSH_INIT: &str = r#"
 TRAPUSR1() {
-    eval $(scd get-cmd-zsh)
+    eval $(scd get-cmd)
+}
+
+scd_run_silently() {
+    eval $@ && zle reset-prompt
+}
+
+scd_run_with_echo() {
+    echo $@ && eval $@ && print -s $@ && zle reset-prompt
 }
 
 scd_cd() {
-    scd cd "$PWD"
+    scd cd $PWD
 }
 
 scd_exit() {
@@ -181,11 +144,11 @@ scd_exit() {
 autoload add-zsh-hook
 add-zsh-hook chpwd scd_cd
 add-zsh-hook zshexit scd_exit
-scd send-pid "$$"
+scd send-pid $$
 
 scd_deinit() {
     add-zsh-hook -d chpwd scd_cd
     add-zsh-hook -d zshexit scd_exit
-    unfunction TRAPUSR1 scd_cd scd_exit scd_deinit
+    unfunction TRAPUSR1 scd_run_silently scd_run_with_echo scd_cd scd_exit scd_deinit
 }
 "#;

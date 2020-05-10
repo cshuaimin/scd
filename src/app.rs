@@ -184,7 +184,7 @@ impl<W: Watcher> App<W> {
         if self.files.is_empty() {
             None
         } else {
-            let idx = self.list_state.selected().unwrap();
+            let idx = self.list_state.selected().unwrap_or(0);
             Some(&self.files[idx])
         }
     }

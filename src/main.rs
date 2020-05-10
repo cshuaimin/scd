@@ -3,6 +3,7 @@ use std::io;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use notify::EventKind;
 use structopt::StructOpt;
 use termion::event::Key;
 use termion::raw::IntoRawMode;
@@ -68,14 +69,17 @@ fn run() -> Result<()> {
         }
 
         match events.next()? {
-            Event::Watch(_) => match app.read_dir() {
-                Ok(res) => {
-                    app.all_files = res;
-                    app.apply_filter();
-                }
-                Err(e) => {
-                    app.show_message(&e.to_string());
-                }
+            Event::Watch(watch) => match watch.kind {
+                EventKind::Create(_) | EventKind::Remove(_) => match app.read_dir() {
+                    Ok(res) => {
+                        app.all_files = res;
+                        app.apply_filter();
+                    }
+                    Err(e) => {
+                        app.show_message(&e.to_string());
+                    }
+                },
+                _ => {}
             },
             Event::Shell(shell_event) => match shell_event {
                 shell::Event::Pid(pid) => app.shell_pid = pid,

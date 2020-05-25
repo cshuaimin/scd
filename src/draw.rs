@@ -6,10 +6,11 @@ use tui::backend::Backend;
 use tui::buffer::Buffer;
 use tui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Modifier, Style};
-use tui::widgets::{List, Paragraph, Text, Widget};
+use tui::widgets::{List, Paragraph, Row, Table, Text, Widget};
 use tui::Frame;
 
 use crate::app::{App, Mode};
+use crate::task;
 
 fn format_time(mut secs: u64) -> String {
     const UNITS: &[(u64, &str)] = &[
@@ -36,10 +37,6 @@ fn format_time(mut secs: u64) -> String {
 }
 
 fn format_size(size: u64) -> String {
-    if size == 0 {
-        return "0B".to_string();
-    }
-
     const UNITS: &[(u64, &str)] = &[
         (1024 * 1024 * 1024 * 1024, "T"),
         (1024 * 1024 * 1024, "G"),
@@ -53,7 +50,7 @@ fn format_size(size: u64) -> String {
             return format!("{:.1}{}", size as f32 / div as f32, unit);
         }
     }
-    unreachable!()
+    "0B".to_string()
 }
 
 struct Meter<'a> {
@@ -105,6 +102,7 @@ where
             [
                 Constraint::Length(9),
                 Constraint::Min(0),
+                Constraint::Length(app.tasks.len() as u16 + 2),
                 Constraint::Length(1),
             ]
             .as_ref(),
@@ -112,10 +110,13 @@ where
         .split(frame.size());
     draw_system_monitor(frame, app, chunks[0]);
     draw_file_manager(frame, app, chunks[1]);
-    draw_bottom_line(frame, app, chunks[2]);
+    if !app.tasks.is_empty() {
+        draw_tasks(frame, app, chunks[2]);
+    }
+    draw_bottom_line(frame, app, chunks[3]);
 }
 
-pub fn draw_system_monitor<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
+fn draw_system_monitor<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
 where
     B: Backend,
 {
@@ -176,7 +177,7 @@ where
     );
 }
 
-pub fn draw_file_manager<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
+fn draw_file_manager<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
 where
     B: Backend,
 {
@@ -225,7 +226,68 @@ where
     frame.render_stateful_widget(list, chunks[1], &mut app.list_state);
 }
 
-pub fn draw_bottom_line<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
+fn draw_tasks<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
+where
+    B: Backend,
+{
+    let max_width = app
+        .tasks
+        .values()
+        .map(|t| {
+            if let task::Status::Running(s) = &t.status {
+                s.len()
+            } else {
+                1
+            }
+        })
+        .max()
+        .unwrap()
+        .max("Running".len())
+        .max("Stopped".len())
+        .max("Status".len()) as u16;
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(max_width)].as_ref())
+        .split(area);
+
+    let mut left = Vec::with_capacity(app.tasks.len() + 1);
+    let mut right = Vec::with_capacity(app.tasks.len() + 1);
+    left.push(Text::raw("Task"));
+    right.push(Text::raw("Status"));
+    for task in app.tasks.values() {
+        left.push(Text::raw(&task.command));
+        let status = match &task.status {
+            task::Status::Running(s) => s,
+            task::Status::Stopped => "Stopped",
+            task::Status::Exited(s) => {
+                if s.success() {
+                    "✓"
+                } else {
+                    "✗"
+                }
+            }
+        };
+        right.push(Text::raw(status));
+    }
+
+    frame.render_widget(List::new(left.into_iter()), chunks[0]);
+    use std::io::Write;
+    use termion::color::*;
+    use termion::cursor::*;
+    write!(
+        std::io::stdout(),
+        "{}{}ls ~/V{}{}",
+        Up(1),
+        Fg(Yellow),
+        Fg(Reset),
+        Left(6)
+    )
+    .unwrap();
+
+    frame.render_widget(List::new(right.into_iter()), chunks[1]);
+}
+
+fn draw_bottom_line<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
 where
     B: Backend,
 {

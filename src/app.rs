@@ -14,6 +14,7 @@ use sysinfo::{RefreshKind, System, SystemExt};
 use tui::widgets::ListState;
 
 use crate::icons::Icons;
+use crate::task::Task;
 
 #[derive(Debug, Clone)]
 pub struct FileInfo {
@@ -81,6 +82,8 @@ pub struct App<W: Watcher = RecommendedWatcher> {
     pub shell_pid: i32,
     pub open_methods: HashMap<String, String>,
 
+    pub tasks: HashMap<u32, Task>,
+
     // bottom input line states
     pub mode: Mode,
 
@@ -102,6 +105,7 @@ impl<W: Watcher> App<W> {
             watcher,
             shell_pid: 0,
             open_methods: get_open_methods()?,
+            tasks: HashMap::new(),
             mode: Mode::Normal,
             system: System::new_with_specifics(RefreshKind::new().with_cpu().with_memory()),
         };

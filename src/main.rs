@@ -14,6 +14,7 @@ use app::*;
 use draw::*;
 use event::*;
 use handlers::*;
+use task::Task;
 
 mod app;
 mod draw;
@@ -21,6 +22,7 @@ mod event;
 mod handlers;
 mod icons;
 mod shell;
+mod task;
 #[cfg(test)]
 mod tests;
 
@@ -39,6 +41,7 @@ enum Command {
 
     Cd { dir: PathBuf },
     SendPid { pid: i32 },
+    SendTask { command: String },
     Exit,
 }
 
@@ -85,6 +88,10 @@ fn run() -> Result<()> {
                 shell::Event::Pid(pid) => app.shell_pid = pid,
                 shell::Event::ChangeDirectory(dir) => app.cd(dir)?,
                 shell::Event::Exit => break,
+                shell::Event::Task(command) => {
+                    let (pid, task) = Task::new(command, events.tx.clone())?;
+                    app.tasks.insert(pid, task);
+                }
             },
             Event::Key(Key::Char('q')) if app.mode == app::Mode::Normal => {
                 if app.shell_pid > 0 {
@@ -98,6 +105,7 @@ fn run() -> Result<()> {
                 }
             }
             Event::Tick(tick) => handle_tick(&mut app, tick),
+            Event::Task { pid, event } => task::handle_event(&mut app, pid, event),
         }
     }
     Ok(())
@@ -113,6 +121,7 @@ fn main() -> Result<()> {
             Command::GetCmd => println!("{}", shell::receive_command()?),
 
             Command::SendPid { pid } => shell::send_event(shell::Event::Pid(pid))?,
+            Command::SendTask { command } => shell::send_event(shell::Event::Task(command))?,
             Command::Cd { dir } => shell::send_event(shell::Event::ChangeDirectory(dir))?,
             Command::Exit => shell::send_event(shell::Event::Exit)?,
         },

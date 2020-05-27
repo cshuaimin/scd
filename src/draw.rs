@@ -96,13 +96,14 @@ pub fn draw_ui<B>(frame: &mut Frame<B>, app: &mut App)
 where
     B: Backend,
 {
+    let task_height = (app.tasks.len() as u16 + 2).min(frame.size().height / 3);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(
             [
                 Constraint::Length(9),
                 Constraint::Min(0),
-                Constraint::Length(app.tasks.len() as u16 + 2),
+                Constraint::Length(task_height),
                 Constraint::Length(1),
             ]
             .as_ref(),
@@ -271,18 +272,18 @@ where
     }
 
     frame.render_widget(List::new(left.into_iter()), chunks[0]);
-    use std::io::Write;
-    use termion::color::*;
-    use termion::cursor::*;
-    write!(
-        std::io::stdout(),
-        "{}{}ls ~/V{}{}",
-        Up(1),
-        Fg(Yellow),
-        Fg(Reset),
-        Left(6)
-    )
-    .unwrap();
+    // use std::io::Write;
+    // use termion::color::*;
+    // use termion::cursor::*;
+    // write!(
+    //     std::io::stdout(),
+    //     "{}{}ls ~/V{}{}",
+    //     Up(1),
+    //     Fg(Yellow),
+    //     Fg(Reset),
+    //     Left(6)
+    // )
+    // .unwrap();
 
     frame.render_widget(List::new(right.into_iter()), chunks[1]);
 }

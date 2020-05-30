@@ -19,7 +19,8 @@ function scd_exit --on-event fish_exit
 end
 
 function scd_send_task
-    scd send-task $argv
+    set rendered (echo $argv | fish_indent --ansi)
+    scd send-task $argv "$rendered"
     echo
     commandline ''
     echo 'Task sent to scd.'

@@ -13,9 +13,9 @@ use crate::app::App;
 use crate::event;
 
 pub enum Event {
-    Stdout(String),
-    Stderr(String),
-    Exit(ExitStatus),
+    Stdout { pid: u32, line: String },
+    Stderr { pid: u32, line: String },
+    Exit { pid: u32, exit_status: ExitStatus },
 }
 
 pub enum Status {
@@ -26,12 +26,13 @@ pub enum Status {
 
 pub struct Task {
     pub command: String,
+    pub rendered: String,
     pub status: Status,
     stdin: ChildStdin,
 }
 
 impl Task {
-    pub fn new(command: String, tx: Sender<event::Event>) -> Result<(u32, Self)> {
+    pub fn new(command: String, rendered: String, tx: Sender<event::Event>) -> Result<(u32, Self)> {
         let shell = env::var("SHELL").unwrap_or("sh".to_string());
         // let c = format!("stdbuf -i0 -o0 -e0 {}", command);
         let mut child = Command::new(shell)
@@ -55,19 +56,13 @@ impl Task {
                     .map(String::from_utf8)
                     .map(Result::unwrap)
                     .for_each(|line| {
-                        tx.send(event::Event::Task {
-                            pid,
-                            event: Event::Stdout(line),
-                        })
-                        .unwrap();
+                        let event = event::Event::Task(Event::Stdout { pid, line });
+                        tx.send(event).unwrap();
                     });
 
                 let exit_status = child.wait().unwrap();
-                tx.send(event::Event::Task {
-                    pid,
-                    event: Event::Exit(exit_status),
-                })
-                .unwrap();
+                let event = event::Event::Task(Event::Exit { pid, exit_status });
+                tx.send(event).unwrap();
             }
         });
 
@@ -79,11 +74,8 @@ impl Task {
                     .map(String::from_utf8)
                     .map(Result::unwrap)
                     .for_each(|line| {
-                        tx.send(event::Event::Task {
-                            pid,
-                            event: Event::Stdout(line),
-                        })
-                        .unwrap();
+                        let event = event::Event::Task(Event::Stderr { pid, line });
+                        tx.send(event).unwrap();
                     });
             }
         });
@@ -92,6 +84,7 @@ impl Task {
             pid,
             Self {
                 command,
+                rendered,
                 status: Status::Running("Running".to_string()),
                 stdin,
             },
@@ -99,11 +92,10 @@ impl Task {
     }
 }
 
-pub fn handle_event(app: &mut App, pid: u32, event: Event) {
-    let mut task = app.tasks.get_mut(&pid).unwrap();
-
+pub fn handle_event(app: &mut App, event: Event) {
     match event {
-        Event::Stdout(line) | Event::Stderr(line) => {
+        Event::Stdout { pid, line } | Event::Stderr { pid, line } => {
+            let mut task = app.tasks.get_mut(&pid).unwrap();
             let name = task.command.split(' ').next().unwrap();
             let status = PARSERS
                 .get(name)
@@ -111,7 +103,10 @@ pub fn handle_event(app: &mut App, pid: u32, event: Event) {
                 .unwrap_or("Running".to_string());
             task.status = Status::Running(status);
         }
-        Event::Exit(exit_status) => task.status = Status::Exited(exit_status),
+        Event::Exit { pid, exit_status } => {
+            let mut task = app.tasks.get_mut(&pid).unwrap();
+            task.status = Status::Exited(exit_status);
+        }
     }
 }
 

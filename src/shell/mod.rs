@@ -74,7 +74,7 @@ pub enum Event {
     Exit,
 
     /// Run and montior the task.
-    Task(String),
+    Task { command: String, rendered: String },
 }
 
 /// Send a shell event to the file manager.

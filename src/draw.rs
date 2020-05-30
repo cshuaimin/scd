@@ -2,12 +2,14 @@ use std::os::unix::fs::PermissionsExt;
 
 use strmode::strmode;
 use sysinfo::{ProcessorExt, SystemExt};
+use termion::cursor;
 use tui::backend::Backend;
 use tui::buffer::Buffer;
 use tui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Modifier, Style};
-use tui::widgets::{List, Paragraph, Row, Table, Text, Widget};
+use tui::widgets::{List, Paragraph, Row, StatefulWidget, Table, Text, Widget};
 use tui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Mode};
 use crate::task;
@@ -96,8 +98,9 @@ pub fn draw_ui<B>(frame: &mut Frame<B>, app: &mut App)
 where
     B: Backend,
 {
-    let task_height = (app.tasks.len() as u16 + 2).min(frame.size().height / 3);
-    let chunks = Layout::default()
+    // + 3: seperator, title, seperator
+    let task_height = (app.tasks.len() as u16 + 3).min(frame.size().height / 3);
+    let mut chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(
             [
@@ -112,6 +115,8 @@ where
     draw_system_monitor(frame, app, chunks[0]);
     draw_file_manager(frame, app, chunks[1]);
     if !app.tasks.is_empty() {
+        chunks[2].y += 1;
+        chunks[2].height -= 1;
         draw_tasks(frame, app, chunks[2]);
     }
     draw_bottom_line(frame, app, chunks[3]);
@@ -227,38 +232,78 @@ where
     frame.render_stateful_widget(list, chunks[1], &mut app.list_state);
 }
 
+pub struct TaskListState {
+    offset: usize,
+    selected: Option<usize>,
+}
+
+impl Default for TaskListState {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            selected: None,
+        }
+    }
+}
+
+struct TaskList<'a, L>
+where
+    L: Iterator<Item = (&'a str, &'a str)>,
+{
+    items: L,
+}
+
+impl<'a, L> StatefulWidget for TaskList<'a, L>
+where
+    L: Iterator<Item = (&'a str, &'a str)>,
+{
+    type State = TaskListState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        let height = area.height as usize;
+        // Make sure the list show the selected item
+        state.offset = if let Some(selected) = state.selected {
+            if selected >= height + state.offset - 1 {
+                selected + 1 - height
+            } else if selected < state.offset {
+                selected
+            } else {
+                state.offset
+            }
+        } else {
+            0
+        };
+
+        macro_rules! draw {
+            ($area:expr, $i:expr, $left:expr, $right:expr) => {{
+                // `Goto` is (1,1)-based
+                let y = $area.top() + $i as u16 + 1;
+                let left_pos = cursor::Goto($area.left() + 1, y);
+                let right_pos = cursor::Goto($area.width + 1 - $right.width() as u16, y);
+                print!("{}{}", left_pos, " ".repeat($area.width as usize));
+                print!("{}{}", left_pos, $left);
+                print!("{}{}", right_pos, $right);
+            }};
+        }
+
+        draw!(area, 0, "Task", "Status");
+
+        self.items
+            .skip(state.offset)
+            .take(height - 1)
+            .enumerate()
+            .for_each(|(i, (command, status))| draw!(area, i + 1, command, status));
+    }
+}
+
 fn draw_tasks<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
 where
     B: Backend,
 {
-    let max_width = app
-        .tasks
-        .values()
-        .map(|t| {
-            if let task::Status::Running(s) = &t.status {
-                s.len()
-            } else {
-                1
-            }
-        })
-        .max()
-        .unwrap()
-        .max("Running".len())
-        .max("Stopped".len())
-        .max("Status".len()) as u16;
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(max_width)].as_ref())
-        .split(area);
-
-    let mut left = Vec::with_capacity(app.tasks.len() + 1);
-    let mut right = Vec::with_capacity(app.tasks.len() + 1);
-    left.push(Text::raw("Task"));
-    right.push(Text::raw("Status"));
-    for task in app.tasks.values() {
-        left.push(Text::raw(&task.command));
+    let items = app.tasks.values().map(|task| {
+        let command = task.rendered.as_str();
         let status = match &task.status {
-            task::Status::Running(s) => s,
+            task::Status::Running(s) => s.as_str(),
             task::Status::Stopped => "Stopped",
             task::Status::Exited(s) => {
                 if s.success() {
@@ -268,25 +313,72 @@ where
                 }
             }
         };
-        right.push(Text::raw(status));
-    }
-
-    frame.render_widget(List::new(left.into_iter()), chunks[0]);
-    // use std::io::Write;
-    // use termion::color::*;
-    // use termion::cursor::*;
-    // write!(
-    //     std::io::stdout(),
-    //     "{}{}ls ~/V{}{}",
-    //     Up(1),
-    //     Fg(Yellow),
-    //     Fg(Reset),
-    //     Left(6)
-    // )
-    // .unwrap();
-
-    frame.render_widget(List::new(right.into_iter()), chunks[1]);
+        (command, status)
+    });
+    let task_list = TaskList { items };
+    frame.render_stateful_widget(task_list, area, &mut app.task_list_status);
 }
+
+// fn draw_tasks<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
+// where
+//     B: Backend,
+// {
+//     let max_width = app
+//         .tasks
+//         .values()
+//         .map(|t| {
+//             if let task::Status::Running(s) = &t.status {
+//                 s.len()
+//             } else {
+//                 1
+//             }
+//         })
+//         .max()
+//         .unwrap()
+//         .max("Running".len())
+//         .max("Stopped".len())
+//         .max("Status".len()) as u16;
+//     let chunks = Layout::default()
+//         .direction(Direction::Horizontal)
+//         .constraints([Constraint::Min(0), Constraint::Length(max_width)].as_ref())
+//         .split(area);
+
+//     let mut left = Vec::with_capacity(app.tasks.len() + 1);
+//     let mut right = Vec::with_capacity(app.tasks.len() + 1);
+//     left.push(Text::raw("Task"));
+//     right.push(Text::raw("Status"));
+//     for task in app.tasks.values() {
+//         left.push(Text::raw(&task.command));
+//         let status = match &task.status {
+//             task::Status::Running(s) => s,
+//             task::Status::Stopped => "Stopped",
+//             task::Status::Exited(s) => {
+//                 if s.success() {
+//                     "✓"
+//                 } else {
+//                     "✗"
+//                 }
+//             }
+//         };
+//         right.push(Text::raw(status));
+//     }
+
+//     frame.render_widget(List::new(left.into_iter()), chunks[0]);
+//     // use std::io::Write;
+//     // use termion::color::*;
+//     // use termion::cursor::*;
+//     // write!(
+//     //     std::io::stdout(),
+//     //     "{}{}ls ~/V{}{}",
+//     //     Up(1),
+//     //     Fg(Yellow),
+//     //     Fg(Reset),
+//     //     Left(6)
+//     // )
+//     // .unwrap();
+
+//     frame.render_widget(List::new(right.into_iter()), chunks[1]);
+// }
 
 fn draw_bottom_line<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
 where
@@ -294,7 +386,7 @@ where
 {
     let prompt_style = Style::default().fg(Color::LightYellow);
     match &app.mode {
-        Mode::Normal => {
+        Mode::Normal | Mode::Task => {
             if let Some(file) = app.selected() {
                 let mode = strmode(file.metadata.permissions().mode());
                 let size = format_size(file.metadata.len());

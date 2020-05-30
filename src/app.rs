@@ -13,6 +13,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use sysinfo::{RefreshKind, System, SystemExt};
 use tui::widgets::ListState;
 
+use crate::draw::TaskListState;
 use crate::icons::Icons;
 use crate::task::Task;
 
@@ -53,10 +54,16 @@ pub enum Mode {
     Normal,
 
     /// Display a short lived message.
-    Message { text: String, expire_at: Instant },
+    Message {
+        text: String,
+        expire_at: Instant,
+    },
 
     /// Ask a yes/no question.
-    Ask { prompt: String, action: Action },
+    Ask {
+        prompt: String,
+        action: Action,
+    },
 
     /// Input some text.
     Input {
@@ -65,6 +72,8 @@ pub enum Mode {
         offset: usize,
         action: Action,
     },
+
+    Task,
 }
 
 /// App contains all the state of the application.
@@ -83,6 +92,7 @@ pub struct App<W: Watcher = RecommendedWatcher> {
     pub open_methods: HashMap<String, String>,
 
     pub tasks: HashMap<u32, Task>,
+    pub task_list_status: TaskListState,
 
     // bottom input line states
     pub mode: Mode,
@@ -106,6 +116,7 @@ impl<W: Watcher> App<W> {
             shell_pid: 0,
             open_methods: get_open_methods()?,
             tasks: HashMap::new(),
+            task_list_status: TaskListState::default(),
             mode: Mode::Normal,
             system: System::new_with_specifics(RefreshKind::new().with_cpu().with_memory()),
         };

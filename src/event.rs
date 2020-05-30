@@ -16,7 +16,7 @@ pub enum Event {
     Shell(shell::Event),
     Key(Key),
     Tick(Instant),
-    Task{ pid: u32, event: task::Event },
+    Task(task::Event),
 }
 
 pub struct Events {

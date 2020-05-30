@@ -36,6 +36,7 @@ pub fn handle_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()> {
             _ => panic!("Unknown action {:?}", action),
         },
         Mode::Input { .. } => handle_input_mode_keys(app, key)?,
+        Mode::Task => handle_task_keys(app, key),
     }
     Ok(())
 }
@@ -152,6 +153,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
                 action: Action::Filter,
             };
         }
+        Key::Char('\t') => app.mode = Mode::Task,
         uk => app.show_message(&format!("Unknown key: {:?}", uk)),
     }
     Ok(())
@@ -245,6 +247,13 @@ fn handle_input_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()> 
         _ => {}
     }
     Ok(())
+}
+
+fn handle_task_keys<W: Watcher>(app: &mut App<W>, key: Key) {
+    match key {
+        Key::Char('\t') => app.mode = Mode::Normal,
+        _ => {}
+    }
 }
 
 pub fn handle_tick<W: Watcher>(app: &mut App<W>, tick: Instant) {

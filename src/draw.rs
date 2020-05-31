@@ -7,7 +7,7 @@ use tui::backend::Backend;
 use tui::buffer::Buffer;
 use tui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Modifier, Style};
-use tui::widgets::{List, Paragraph, Row, StatefulWidget, Table, Text, Widget};
+use tui::widgets::{List, Paragraph, StatefulWidget, Text, Widget};
 use tui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -259,7 +259,7 @@ where
 {
     type State = TaskListState;
 
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+    fn render(self, area: Rect, _buf: &mut Buffer, state: &mut Self::State) {
         let height = area.height as usize;
         // Make sure the list show the selected item
         state.offset = if let Some(selected) = state.selected {
@@ -318,67 +318,6 @@ where
     let task_list = TaskList { items };
     frame.render_stateful_widget(task_list, area, &mut app.task_list_status);
 }
-
-// fn draw_tasks<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
-// where
-//     B: Backend,
-// {
-//     let max_width = app
-//         .tasks
-//         .values()
-//         .map(|t| {
-//             if let task::Status::Running(s) = &t.status {
-//                 s.len()
-//             } else {
-//                 1
-//             }
-//         })
-//         .max()
-//         .unwrap()
-//         .max("Running".len())
-//         .max("Stopped".len())
-//         .max("Status".len()) as u16;
-//     let chunks = Layout::default()
-//         .direction(Direction::Horizontal)
-//         .constraints([Constraint::Min(0), Constraint::Length(max_width)].as_ref())
-//         .split(area);
-
-//     let mut left = Vec::with_capacity(app.tasks.len() + 1);
-//     let mut right = Vec::with_capacity(app.tasks.len() + 1);
-//     left.push(Text::raw("Task"));
-//     right.push(Text::raw("Status"));
-//     for task in app.tasks.values() {
-//         left.push(Text::raw(&task.command));
-//         let status = match &task.status {
-//             task::Status::Running(s) => s,
-//             task::Status::Stopped => "Stopped",
-//             task::Status::Exited(s) => {
-//                 if s.success() {
-//                     "✓"
-//                 } else {
-//                     "✗"
-//                 }
-//             }
-//         };
-//         right.push(Text::raw(status));
-//     }
-
-//     frame.render_widget(List::new(left.into_iter()), chunks[0]);
-//     // use std::io::Write;
-//     // use termion::color::*;
-//     // use termion::cursor::*;
-//     // write!(
-//     //     std::io::stdout(),
-//     //     "{}{}ls ~/V{}{}",
-//     //     Up(1),
-//     //     Fg(Yellow),
-//     //     Fg(Reset),
-//     //     Left(6)
-//     // )
-//     // .unwrap();
-
-//     frame.render_widget(List::new(right.into_iter()), chunks[1]);
-// }
 
 fn draw_bottom_line<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
 where

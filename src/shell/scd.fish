@@ -21,6 +21,9 @@ end
 function scd_send_task
     set rendered (echo $argv | fish_indent --ansi)
     scd send-task $argv "$rendered"
+    echo "- cmd:" $argv % >> ~/.local/share/fish/fish_history
+    echo "  when:" (date "+%s") >> ~/.local/share/fish/fish_history
+    history --merge
     echo
     commandline ''
     echo 'Task sent to scd.'

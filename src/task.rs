@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::io::{BufRead, BufReader};
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{ChildStdin, Command, ExitStatus, Stdio};
 use std::thread;
 
 use anyhow::Result;

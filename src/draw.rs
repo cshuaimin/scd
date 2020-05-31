@@ -288,7 +288,7 @@ where
             let right_pos = cursor::Goto(area.width - max_status_width, y);
             write!(stdout, "{}{}", left_pos, " ".repeat(area.width as usize)).unwrap();
             write!(stdout, "{}{}", left_pos, $left).unwrap();
-            write!(stdout, "{} {:2$}", right_pos, $right, max_status_width as usize).unwrap();
+            write!(stdout, "{} {:>2$}", right_pos, $right, max_status_width as usize).unwrap();
         }};
     }
 

@@ -54,16 +54,10 @@ pub enum Mode {
     Normal,
 
     /// Display a short lived message.
-    Message {
-        text: String,
-        expire_at: Instant,
-    },
+    Message { text: String, expire_at: Instant },
 
     /// Ask a yes/no question.
-    Ask {
-        prompt: String,
-        action: Action,
-    },
+    Ask { prompt: String, action: Action },
 
     /// Input some text.
     Input {
@@ -73,6 +67,7 @@ pub enum Mode {
         action: Action,
     },
 
+    /// Manage tasks: kill, stop, continue..
     Task,
 }
 
@@ -86,13 +81,14 @@ pub struct App<W: Watcher = RecommendedWatcher> {
     pub filter: String,
     pub show_hidden: bool,
     pub icons: Icons,
-    pub list_state: ListState,
+    pub file_list_state: ListState,
     pub watcher: W,
     pub shell_pid: i32,
     pub open_methods: HashMap<String, String>,
 
-    pub tasks: HashMap<u32, Task>,
-    pub task_list_status: TaskListState,
+    // task manager states
+    pub tasks: Vec<Task>,
+    pub task_list_state: TaskListState,
 
     // bottom input line states
     pub mode: Mode,
@@ -111,12 +107,12 @@ impl<W: Watcher> App<W> {
             filter: "".to_string(),
             show_hidden: false,
             icons: Icons::new(),
-            list_state: ListState::default(),
+            file_list_state: ListState::default(),
             watcher,
             shell_pid: 0,
             open_methods: get_open_methods()?,
-            tasks: HashMap::new(),
-            task_list_status: TaskListState::default(),
+            tasks: vec![],
+            task_list_state: TaskListState::default(),
             mode: Mode::Normal,
             system: System::new_with_specifics(RefreshKind::new().with_cpu().with_memory()),
         };
@@ -156,7 +152,7 @@ impl<W: Watcher> App<W> {
 
     pub fn select_file(&mut self, name: String) {
         let index = self.files.iter().position(|f| f.name == name).unwrap_or(0);
-        self.list_state.select(Some(index));
+        self.file_list_state.select(Some(index));
     }
 
     pub fn cd(&mut self, mut dir: PathBuf) -> Result<()> {
@@ -199,14 +195,14 @@ impl<W: Watcher> App<W> {
         if self.files.is_empty() {
             None
         } else {
-            let idx = self.list_state.selected().unwrap_or(0);
+            let idx = self.file_list_state.selected().unwrap_or(0);
             Some(&self.files[idx])
         }
     }
 
     pub fn select_first(&mut self) {
         let index = if self.files.is_empty() { None } else { Some(0) };
-        self.list_state.select(index);
+        self.file_list_state.select(index);
     }
 
     pub fn select_last(&mut self) {
@@ -214,25 +210,25 @@ impl<W: Watcher> App<W> {
             0 => None,
             len => Some(len - 1),
         };
-        self.list_state.select(index);
+        self.file_list_state.select(index);
     }
 
     pub fn select_next(&mut self) {
         let index = self
-            .list_state
+            .file_list_state
             .selected()
             .map(|i| (i + 1) % self.files.len());
-        self.list_state.select(index);
+        self.file_list_state.select(index);
     }
 
     pub fn select_prev(&mut self) {
-        let index = match self.list_state.selected() {
+        let index = match self.file_list_state.selected() {
             None => None,
             Some(0) if self.files.is_empty() => None,
             Some(0) => Some(self.files.len() - 1),
             Some(i) => Some(i - 1),
         };
-        self.list_state.select(index);
+        self.file_list_state.select(index);
     }
 }
 

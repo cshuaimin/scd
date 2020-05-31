@@ -31,7 +31,8 @@ function scd_send_task
 end
 
 function scd_enter_key
-    set cmd (string trim --right --chars % (commandline))
+    set cmd (string trim --right (commandline))
+    set cmd (string trim --right --chars '% ' $cmd)
     and scd_send_task $cmd
     or commandline -f execute
 end

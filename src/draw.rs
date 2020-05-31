@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 
 use strmode::strmode;
@@ -7,7 +8,7 @@ use tui::backend::Backend;
 use tui::buffer::Buffer;
 use tui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Modifier, Style};
-use tui::widgets::{List, Paragraph, StatefulWidget, Text, Widget};
+use tui::widgets::{List, Paragraph, Text, Widget};
 use tui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -104,7 +105,7 @@ where
         .direction(Direction::Vertical)
         .constraints(
             [
-                Constraint::Length(9),
+                Constraint::Length(8),
                 Constraint::Min(0),
                 Constraint::Length(task_height),
                 Constraint::Length(1),
@@ -229,7 +230,7 @@ where
         .collect::<Vec<_>>()
         .into_iter();
     let list = List::new(items).highlight_style(Style::default().fg(Color::Black).bg(Color::Blue));
-    frame.render_stateful_widget(list, chunks[1], &mut app.list_state);
+    frame.render_stateful_widget(list, chunks[1], &mut app.file_list_state);
 }
 
 pub struct TaskListState {
@@ -246,77 +247,83 @@ impl Default for TaskListState {
     }
 }
 
-struct TaskList<'a, L>
-where
-    L: Iterator<Item = (&'a str, &'a str)>,
-{
-    items: L,
-}
-
-impl<'a, L> StatefulWidget for TaskList<'a, L>
-where
-    L: Iterator<Item = (&'a str, &'a str)>,
-{
-    type State = TaskListState;
-
-    fn render(self, area: Rect, _buf: &mut Buffer, state: &mut Self::State) {
-        let height = area.height as usize;
-        // Make sure the list show the selected item
-        state.offset = if let Some(selected) = state.selected {
-            if selected >= height + state.offset - 1 {
-                selected + 1 - height
-            } else if selected < state.offset {
-                selected
-            } else {
-                state.offset
-            }
-        } else {
-            0
-        };
-
-        macro_rules! draw {
-            ($area:expr, $i:expr, $left:expr, $right:expr) => {{
-                // `Goto` is (1,1)-based
-                let y = $area.top() + $i as u16 + 1;
-                let left_pos = cursor::Goto($area.left() + 1, y);
-                let right_pos = cursor::Goto($area.width + 1 - $right.width() as u16, y);
-                print!("{}{}", left_pos, " ".repeat($area.width as usize));
-                print!("{}{}", left_pos, $left);
-                print!("{}{}", right_pos, $right);
-            }};
-        }
-
-        draw!(area, 0, "Task", "Status");
-
-        self.items
-            .skip(state.offset)
-            .take(height - 1)
-            .enumerate()
-            .for_each(|(i, (command, status))| draw!(area, i + 1, command, status));
-    }
-}
-
-fn draw_tasks<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
+fn draw_tasks<B>(_frame: &mut Frame<B>, app: &mut App, area: Rect)
 where
     B: Backend,
 {
-    let items = app.tasks.values().map(|task| {
-        let command = task.rendered.as_str();
-        let status = match &task.status {
-            task::Status::Running(s) => s.as_str(),
-            task::Status::Stopped => "Stopped",
-            task::Status::Exited(s) => {
-                if s.success() {
-                    "✓"
-                } else {
-                    "✗"
+    let height = area.height as usize;
+    let state = &mut app.task_list_state;
+    // Make sure the list show the selected item
+    state.offset = if let Some(selected) = state.selected {
+        if selected >= height + state.offset - 1 {
+            selected + 1 - height
+        } else if selected < state.offset {
+            selected
+        } else {
+            state.offset
+        }
+    } else {
+        0
+    };
+
+    let max_status_width = app
+        .tasks
+        .iter()
+        .map(|t| match &t.status {
+            task::Status::Running(s) => s.len(),
+            task::Status::Stopped => "Stopped".len(),
+            task::Status::Exited(_) => 1,
+        })
+        .max()
+        .unwrap()
+        .max("Status".len()) as u16;
+
+    let mut stdout = io::stdout();
+
+    macro_rules! draw {
+        ($i:expr, $left:expr, $right:expr) => {{
+            // `Goto` is (1,1)-based
+            let y = area.top() + $i as u16 + 1;
+            let left_pos = cursor::Goto(area.left() + 1, y);
+            let right_pos = cursor::Goto(area.width - max_status_width, y);
+            write!(stdout, "{}{}", left_pos, " ".repeat(area.width as usize)).unwrap();
+            write!(stdout, "{}{}", left_pos, $left).unwrap();
+            write!(stdout, "{} {:2$}", right_pos, $right, max_status_width as usize).unwrap();
+        }};
+    }
+
+    draw!(0, "Task", "Status");
+
+    app.tasks
+        .iter()
+        .map(|task| {
+            let command = task.rendered.as_str();
+            let status = match &task.status {
+                task::Status::Running(s) => s.as_str(),
+                task::Status::Stopped => "Stopped",
+                task::Status::Exited(s) => {
+                    if s.success() {
+                        "✓"
+                    } else {
+                        "✗"
+                    }
                 }
-            }
-        };
-        (command, status)
-    });
-    let task_list = TaskList { items };
-    frame.render_stateful_widget(task_list, area, &mut app.task_list_status);
+            };
+            (command, status)
+        })
+        .skip(state.offset)
+        .take(height - 1)
+        .enumerate()
+        .for_each(|(i, (command, status))| draw!(i + 1, command, status));
+
+    write!(
+        stdout,
+        "{}{}",
+        cursor::Goto(area.left() + 1, area.bottom()),
+        " ".repeat(area.width as usize)
+    )
+    .unwrap();
+    stdout.flush().unwrap();
 }
 
 fn draw_bottom_line<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
@@ -351,7 +358,7 @@ where
             }
             text.push_str(&format!(
                 " {}/{}",
-                app.list_state.selected().map(|i| i + 1).unwrap_or(0),
+                app.file_list_state.selected().map(|i| i + 1).unwrap_or(0),
                 app.files.len()
             ));
             frame.render_widget(

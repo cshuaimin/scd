@@ -25,6 +25,7 @@ pub enum Status {
 }
 
 pub struct Task {
+    pub pid: u32,
     pub command: String,
     pub rendered: String,
     pub status: Status,
@@ -32,9 +33,8 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn new(command: String, rendered: String, tx: Sender<event::Event>) -> Result<(u32, Self)> {
+    pub fn new(command: String, rendered: String, tx: Sender<event::Event>) -> Result<Self> {
         let shell = env::var("SHELL").unwrap_or("sh".to_string());
-        // let c = format!("stdbuf -i0 -o0 -e0 {}", command);
         let mut child = Command::new(shell)
             .args(&["-c", &command])
             .stdin(Stdio::piped())
@@ -80,22 +80,34 @@ impl Task {
             }
         });
 
-        Ok((
+        Ok(Self {
             pid,
-            Self {
-                command,
-                rendered,
-                status: Status::Running("Running".to_string()),
-                stdin,
-            },
-        ))
+            command,
+            rendered,
+            status: Status::Running("Running".to_string()),
+            stdin,
+        })
     }
+}
+
+fn sort_tasks(tasks: &mut [Task]) {
+    tasks.sort_by_key(|t| match t.status {
+        Status::Running(_) => 0,
+        Status::Stopped => 1,
+        Status::Exited(exit_status) => {
+            if !exit_status.success() {
+                2
+            } else {
+                3
+            }
+        }
+    });
 }
 
 pub fn handle_event(app: &mut App, event: Event) {
     match event {
         Event::Stdout { pid, line } | Event::Stderr { pid, line } => {
-            let mut task = app.tasks.get_mut(&pid).unwrap();
+            let mut task = app.tasks.iter_mut().find(|t| t.pid == pid).unwrap();
             let name = task.command.split(' ').next().unwrap();
             let status = PARSERS
                 .get(name)
@@ -104,8 +116,9 @@ pub fn handle_event(app: &mut App, event: Event) {
             task.status = Status::Running(status);
         }
         Event::Exit { pid, exit_status } => {
-            let mut task = app.tasks.get_mut(&pid).unwrap();
+            let mut task = app.tasks.iter_mut().find(|t| t.pid == pid).unwrap();
             task.status = Status::Exited(exit_status);
+            sort_tasks(&mut app.tasks);
         }
     }
 }

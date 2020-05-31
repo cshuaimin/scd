@@ -73,7 +73,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
             if let Some(parent) = app.dir.parent() {
                 let parent = parent.to_path_buf();
                 let current = app.dir.file_name().unwrap().to_str().unwrap().to_owned();
-                if let Ok(_) = app.cd(parent.clone()) {
+                if app.cd(parent.clone()).is_ok() {
                     app.select_file(current);
                     if app.shell_pid > 0 {
                         shell::run(app.shell_pid, "cd", &[parent.to_str().unwrap()], false)?;
@@ -93,7 +93,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
                     let path = file.path.clone();
                     app.files_marked.push(path);
                 }
-                if app.list_state.selected().unwrap() != app.files.len() - 1 {
+                if app.file_list_state.selected().unwrap() != app.files.len() - 1 {
                     app.select_next();
                 }
             }

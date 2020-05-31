@@ -7,6 +7,7 @@ use notify::EventKind;
 use structopt::StructOpt;
 use termion::event::Key;
 use termion::raw::IntoRawMode;
+use termion::screen::AlternateScreen;
 use tui::backend::TermionBackend;
 use tui::Terminal;
 
@@ -45,23 +46,42 @@ enum Command {
     Exit,
 }
 
+fn main() -> Result<()> {
+    let opt = Opt::from_args();
+    match opt.command {
+        None => run()?,
+        Some(command) => match command {
+            Command::FishInit => println!("{}", shell::FISH_INIT),
+            Command::ZshInit => println!("{}", shell::ZSH_INIT),
+            Command::GetCmd => println!("{}", shell::receive_command()?),
+
+            Command::SendPid { pid } => shell::send_event(shell::Event::Pid(pid))?,
+            Command::SendTask { command, rendered } => {
+                shell::send_event(shell::Event::Task { command, rendered })?
+            }
+            Command::Cd { dir } => shell::send_event(shell::Event::ChangeDirectory(dir))?,
+            Command::Exit => shell::send_event(shell::Event::Exit)?,
+        },
+    }
+    Ok(())
+}
+
 fn run() -> Result<()> {
     let mut terminal = {
         let stdout = io::stdout().into_raw_mode()?;
+        let stdout = AlternateScreen::from(stdout);
         let backend = TermionBackend::new(stdout);
         Terminal::new(backend)?
     };
-    terminal.clear()?;
 
     let (events, watcher) = Events::new()?;
     let mut app = App::new(watcher, env::current_dir()?)?;
 
     loop {
-        terminal.draw(|mut frame| {
-            draw_ui(&mut frame, &mut app);
-        })?;
+        terminal.draw(|mut frame| draw_ui(&mut frame, &mut app))?;
+
         match &app.mode {
-            app::Mode::Input { prompt, offset, .. } => {
+            Mode::Input { prompt, offset, .. } => {
                 terminal.set_cursor(
                     (prompt.len() + offset) as u16,
                     terminal.size()?.bottom() - 1,
@@ -89,8 +109,8 @@ fn run() -> Result<()> {
                 shell::Event::ChangeDirectory(dir) => app.cd(dir)?,
                 shell::Event::Exit => break,
                 shell::Event::Task { command, rendered } => {
-                    let (pid, task) = Task::new(command, rendered, events.tx.clone())?;
-                    app.tasks.insert(pid, task);
+                    app.tasks
+                        .push(Task::new(command, rendered, events.tx.clone())?);
                 }
             },
             Event::Key(Key::Char('q')) if app.mode == app::Mode::Normal => {
@@ -107,26 +127,6 @@ fn run() -> Result<()> {
             Event::Tick(tick) => handle_tick(&mut app, tick),
             Event::Task(task_event) => task::handle_event(&mut app, task_event),
         }
-    }
-    Ok(())
-}
-
-fn main() -> Result<()> {
-    let opt = Opt::from_args();
-    match opt.command {
-        None => run()?,
-        Some(command) => match command {
-            Command::FishInit => println!("{}", shell::FISH_INIT),
-            Command::ZshInit => println!("{}", shell::ZSH_INIT),
-            Command::GetCmd => println!("{}", shell::receive_command()?),
-
-            Command::SendPid { pid } => shell::send_event(shell::Event::Pid(pid))?,
-            Command::SendTask { command, rendered } => {
-                shell::send_event(shell::Event::Task { command, rendered })?
-            }
-            Command::Cd { dir } => shell::send_event(shell::Event::ChangeDirectory(dir))?,
-            Command::Exit => shell::send_event(shell::Event::Exit)?,
-        },
     }
     Ok(())
 }

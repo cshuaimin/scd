@@ -84,24 +84,10 @@ impl Task {
             pid,
             command,
             rendered,
-            status: Status::Running("Running".to_string()),
+            status: Status::Running("\u{f110}".to_string()),
             stdin,
         })
     }
-}
-
-fn sort_tasks(tasks: &mut [Task]) {
-    tasks.sort_by_key(|t| match t.status {
-        Status::Running(_) => 3,
-        Status::Stopped => 2,
-        Status::Exited(exit_status) => {
-            if !exit_status.success() {
-                1
-            } else {
-                0
-            }
-        }
-    });
 }
 
 pub fn handle_event(app: &mut App, event: Event) {
@@ -112,13 +98,23 @@ pub fn handle_event(app: &mut App, event: Event) {
             let status = PARSERS
                 .get(name)
                 .and_then(|parser| parser.parse(line))
-                .unwrap_or("Running".to_string());
+                .unwrap_or("\u{f110}".to_string());
             task.status = Status::Running(status);
         }
         Event::Exit { pid, exit_status } => {
             let mut task = app.tasks.iter_mut().find(|t| t.pid == pid).unwrap();
             task.status = Status::Exited(exit_status);
-            sort_tasks(&mut app.tasks);
+            app.tasks.sort_by_key(|t| match t.status {
+                Status::Running(_) => 3,
+                Status::Stopped => 2,
+                Status::Exited(exit_status) => {
+                    if !exit_status.success() {
+                        1
+                    } else {
+                        0
+                    }
+                }
+            });
         }
     }
 }

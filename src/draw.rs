@@ -3,6 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use strmode::strmode;
 use sysinfo::{ProcessorExt, SystemExt};
+use termion::color;
 use termion::cursor;
 use tui::backend::Backend;
 use tui::buffer::Buffer;
@@ -270,9 +271,8 @@ where
         .tasks
         .iter()
         .map(|t| match &t.status {
-            task::Status::Running(s) => s.len(),
-            task::Status::Stopped => "Stopped".len(),
-            task::Status::Exited(_) => 1,
+            task::Status::Running(s) => s.width(),
+            task::Status::Stopped | task::Status::Exited(_) => 1,
         })
         .max()
         .unwrap()
@@ -281,7 +281,7 @@ where
     let mut stdout = io::stdout();
 
     macro_rules! draw {
-        ($i:expr, $left:expr, $right:expr) => {{
+        ($i:expr, $left:expr, $right_color:expr, $right:expr) => {{
             // `Goto` is (1,1)-based
             let y = area.top() + $i as u16 + 1;
             let left_pos = cursor::Goto(area.left() + 1, y);
@@ -290,37 +290,41 @@ where
             write!(stdout, "{}{}", left_pos, $left).unwrap();
             write!(
                 stdout,
-                "{} {:>2$}",
-                right_pos, $right, max_status_width as usize
+                "{} {}{:>w$}",
+                right_pos,
+                $right_color,
+                $right,
+                w = max_status_width as usize
             )
             .unwrap();
         }};
     }
 
-    draw!(0, "Task", "Status");
+    draw!(0, "Task", color::White.fg_str(), "Status");
 
     app.tasks
         .iter()
         .rev()
         .map(|task| {
-            let command = task.rendered.as_str();
-            let status = match &task.status {
-                task::Status::Running(s) => s.as_str(),
-                task::Status::Stopped => "Stopped",
+            let (status_color, status) = match &task.status {
+                task::Status::Running(s) => (color::White.fg_str(), s.as_str()),
+                task::Status::Stopped => (color::LightYellow.fg_str(), "\u{f04c}"),
                 task::Status::Exited(s) => {
                     if s.success() {
-                        "✓"
+                        (color::LightCyan.fg_str(), "✓")
                     } else {
-                        "✗"
+                        (color::LightRed.fg_str(), "✗")
                     }
                 }
             };
-            (command, status)
+            (task.rendered.as_str(), status_color, status)
         })
         .skip(state.offset)
         .take(height - 1)
         .enumerate()
-        .for_each(|(i, (command, status))| draw!(i + 1, command, status));
+        .for_each(|(i, (command, status_color, status))| {
+            draw!(i + 1, command, status_color, status)
+        });
 
     write!(
         stdout,

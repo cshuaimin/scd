@@ -92,13 +92,13 @@ impl Task {
 
 fn sort_tasks(tasks: &mut [Task]) {
     tasks.sort_by_key(|t| match t.status {
-        Status::Running(_) => 0,
-        Status::Stopped => 1,
+        Status::Running(_) => 3,
+        Status::Stopped => 2,
         Status::Exited(exit_status) => {
             if !exit_status.success() {
-                2
+                1
             } else {
-                3
+                0
             }
         }
     });

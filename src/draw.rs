@@ -1,15 +1,20 @@
+use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 
 use strmode::strmode;
 use sysinfo::{ProcessorExt, SystemExt};
+use termion::color;
+use termion::cursor;
 use tui::backend::Backend;
 use tui::buffer::Buffer;
 use tui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Modifier, Style};
 use tui::widgets::{List, Paragraph, Text, Widget};
 use tui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Mode};
+use crate::task;
 
 fn format_time(mut secs: u64) -> String {
     const UNITS: &[(u64, &str)] = &[
@@ -36,10 +41,6 @@ fn format_time(mut secs: u64) -> String {
 }
 
 fn format_size(size: u64) -> String {
-    if size == 0 {
-        return "0B".to_string();
-    }
-
     const UNITS: &[(u64, &str)] = &[
         (1024 * 1024 * 1024 * 1024, "T"),
         (1024 * 1024 * 1024, "G"),
@@ -53,7 +54,7 @@ fn format_size(size: u64) -> String {
             return format!("{:.1}{}", size as f32 / div as f32, unit);
         }
     }
-    unreachable!()
+    "0B".to_string()
 }
 
 struct Meter<'a> {
@@ -99,12 +100,15 @@ pub fn draw_ui<B>(frame: &mut Frame<B>, app: &mut App)
 where
     B: Backend,
 {
-    let chunks = Layout::default()
+    // + 3: seperator, title, seperator
+    let task_height = (app.tasks.len() as u16 + 3).min(frame.size().height / 3);
+    let mut chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(
             [
-                Constraint::Length(9),
+                Constraint::Length(8),
                 Constraint::Min(0),
+                Constraint::Length(task_height),
                 Constraint::Length(1),
             ]
             .as_ref(),
@@ -112,10 +116,15 @@ where
         .split(frame.size());
     draw_system_monitor(frame, app, chunks[0]);
     draw_file_manager(frame, app, chunks[1]);
-    draw_bottom_line(frame, app, chunks[2]);
+    if !app.tasks.is_empty() {
+        chunks[2].y += 1;
+        chunks[2].height -= 1;
+        draw_tasks(frame, app, chunks[2]);
+    }
+    draw_bottom_line(frame, app, chunks[3]);
 }
 
-pub fn draw_system_monitor<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
+fn draw_system_monitor<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
 where
     B: Backend,
 {
@@ -176,7 +185,7 @@ where
     );
 }
 
-pub fn draw_file_manager<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
+fn draw_file_manager<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
 where
     B: Backend,
 {
@@ -222,16 +231,118 @@ where
         .collect::<Vec<_>>()
         .into_iter();
     let list = List::new(items).highlight_style(Style::default().fg(Color::Black).bg(Color::Blue));
-    frame.render_stateful_widget(list, chunks[1], &mut app.list_state);
+    frame.render_stateful_widget(list, chunks[1], &mut app.file_list_state);
 }
 
-pub fn draw_bottom_line<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
+pub struct TaskListState {
+    offset: usize,
+    selected: Option<usize>,
+}
+
+impl Default for TaskListState {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            selected: None,
+        }
+    }
+}
+
+fn draw_tasks<B>(_frame: &mut Frame<B>, app: &mut App, area: Rect)
+where
+    B: Backend,
+{
+    let height = area.height as usize;
+    let state = &mut app.task_list_state;
+    // Make sure the list show the selected item
+    state.offset = if let Some(selected) = state.selected {
+        if selected >= height + state.offset - 1 {
+            selected + 1 - height
+        } else if selected < state.offset {
+            selected
+        } else {
+            state.offset
+        }
+    } else {
+        0
+    };
+
+    let max_status_width = app
+        .tasks
+        .iter()
+        .map(|t| match &t.status {
+            task::Status::Running(s) => s.width(),
+            task::Status::Stopped | task::Status::Exited(_) => 1,
+        })
+        .max()
+        .unwrap()
+        .max("Status".len()) as u16;
+
+    let mut stdout = io::stdout();
+
+    macro_rules! draw {
+        ($i:expr, $left:expr, $right_color:expr, $right:expr) => {{
+            // `Goto` is (1,1)-based
+            let y = area.top() + $i as u16 + 1;
+            let left_pos = cursor::Goto(area.left() + 1, y);
+            let right_pos = cursor::Goto(area.width - max_status_width, y);
+            write!(stdout, "{}{}", left_pos, " ".repeat(area.width as usize)).unwrap();
+            write!(stdout, "{}{}", left_pos, $left).unwrap();
+            write!(
+                stdout,
+                "{} {}{:>w$}",
+                right_pos,
+                $right_color,
+                $right,
+                w = max_status_width as usize
+            )
+            .unwrap();
+        }};
+    }
+
+    draw!(0, "Task", color::White.fg_str(), "Status");
+
+    app.tasks
+        .iter()
+        .rev()
+        .map(|task| {
+            let (status_color, status) = match &task.status {
+                task::Status::Running(s) => (color::White.fg_str(), s.as_str()),
+                task::Status::Stopped => (color::LightYellow.fg_str(), "\u{f04c}"),
+                task::Status::Exited(s) => {
+                    if s.success() {
+                        (color::LightCyan.fg_str(), "✓")
+                    } else {
+                        (color::LightRed.fg_str(), "✗")
+                    }
+                }
+            };
+            (task.rendered.as_str(), status_color, status)
+        })
+        .skip(state.offset)
+        .take(height - 1)
+        .enumerate()
+        .for_each(|(i, (command, status_color, status))| {
+            draw!(i + 1, command, status_color, status)
+        });
+
+    write!(
+        stdout,
+        "{}{}",
+        cursor::Goto(area.left() + 1, area.bottom()),
+        " ".repeat(area.width as usize)
+    )
+    .unwrap();
+    stdout.flush().unwrap();
+}
+
+fn draw_bottom_line<B>(frame: &mut Frame<B>, app: &mut App, area: Rect)
 where
     B: Backend,
 {
     let prompt_style = Style::default().fg(Color::LightYellow);
     match &app.mode {
-        Mode::Normal => {
+        Mode::Normal | Mode::Task => {
             if let Some(file) = app.selected() {
                 let mode = strmode(file.metadata.permissions().mode());
                 let size = format_size(file.metadata.len());
@@ -257,7 +368,7 @@ where
             }
             text.push_str(&format!(
                 " {}/{}",
-                app.list_state.selected().map(|i| i + 1).unwrap_or(0),
+                app.file_list_state.selected().map(|i| i + 1).unwrap_or(0),
                 app.files.len()
             ));
             frame.render_widget(

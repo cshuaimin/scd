@@ -55,7 +55,7 @@ fn test_selection_after_filter() -> Result<()> {
     app.apply_filter();
     app.filter = "".to_string();
     app.apply_filter();
-    assert_eq!(app.list_state.selected(), Some(1));
+    assert_eq!(app.file_list_state.selected(), Some(1));
 
     Ok(())
 }

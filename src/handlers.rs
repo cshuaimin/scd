@@ -36,6 +36,7 @@ pub fn handle_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()> {
             _ => panic!("Unknown action {:?}", action),
         },
         Mode::Input { .. } => handle_input_mode_keys(app, key)?,
+        Mode::Task => handle_task_keys(app, key),
     }
     Ok(())
 }
@@ -72,7 +73,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
             if let Some(parent) = app.dir.parent() {
                 let parent = parent.to_path_buf();
                 let current = app.dir.file_name().unwrap().to_str().unwrap().to_owned();
-                if let Ok(_) = app.cd(parent.clone()) {
+                if app.cd(parent.clone()).is_ok() {
                     app.select_file(current);
                     if app.shell_pid > 0 {
                         shell::run(app.shell_pid, "cd", &[parent.to_str().unwrap()], false)?;
@@ -92,7 +93,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
                     let path = file.path.clone();
                     app.files_marked.push(path);
                 }
-                if app.list_state.selected().unwrap() != app.files.len() - 1 {
+                if app.file_list_state.selected().unwrap() != app.files.len() - 1 {
                     app.select_next();
                 }
             }
@@ -152,6 +153,7 @@ fn handle_normal_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()>
                 action: Action::Filter,
             };
         }
+        Key::Char('\t') => app.mode = Mode::Task,
         uk => app.show_message(&format!("Unknown key: {:?}", uk)),
     }
     Ok(())
@@ -245,6 +247,13 @@ fn handle_input_mode_keys<W: Watcher>(app: &mut App<W>, key: Key) -> Result<()> 
         _ => {}
     }
     Ok(())
+}
+
+fn handle_task_keys<W: Watcher>(app: &mut App<W>, key: Key) {
+    match key {
+        Key::Char('\t') => app.mode = Mode::Normal,
+        _ => {}
+    }
 }
 
 pub fn handle_tick<W: Watcher>(app: &mut App<W>, tick: Instant) {

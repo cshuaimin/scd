@@ -1,249 +1,159 @@
-use std::cmp;
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::env;
-use std::fs::{self, DirEntry, Metadata};
 use std::io;
-use std::mem;
-use std::path::{Path, PathBuf};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use sysinfo::{RefreshKind, System, SystemExt};
-use tui::widgets::ListState;
+use crossbeam_channel::{self as channel, select, Receiver};
+use notify::RecommendedWatcher;
+use termion::{event::Key, input::TermRead, raw::IntoRawMode, screen::AlternateScreen};
+use tui::backend::TermionBackend;
+use tui::layout::{Constraint, Direction, Layout};
+use tui::Terminal;
 
-use crate::draw::TaskListState;
-use crate::icons::Icons;
-use crate::task::Task;
+use crate::file_manager::FileManager;
+use crate::shell;
+use crate::status_bar::{Mode, StatusBar};
+use crate::system_monitor::SystemMonitor;
+use crate::task_manager::{self, TaskManager};
 
-#[derive(Debug, Clone)]
-pub struct FileInfo {
-    pub path: PathBuf,
-    pub name: String,
-    pub extension: Option<String>,
-    pub metadata: Metadata,
+enum InputFocus {
+    FileManager,
+    TaskManager,
 }
 
-impl TryFrom<DirEntry> for FileInfo {
-    type Error = io::Error;
+pub struct App {
+    system_monitor: SystemMonitor,
+    file_manager: FileManager<RecommendedWatcher>,
+    task_manager: TaskManager,
+    status_bar: StatusBar,
 
-    fn try_from(entry: DirEntry) -> Result<Self, Self::Error> {
-        let path = entry.path();
-        let name = entry.file_name().to_str().unwrap().to_owned();
-        let extension = path.extension().map(|e| e.to_str().unwrap().to_owned());
-        Ok(Self {
-            path,
-            name,
-            extension,
-            metadata: entry.metadata()?,
+    input_focus: InputFocus,
+    keys: channel::Receiver<Key>,
+    ticks: Receiver<Instant>,
+    watch_events: Receiver<notify::Event>,
+    task_events: Receiver<task_manager::Event>,
+    shell_events: Receiver<shell::Event>,
+}
+
+impl App {
+    pub fn new() -> Result<App> {
+        let system_monitor = SystemMonitor::new();
+        let (file_manager, watch_events) = FileManager::new()?;
+        let (task_manager, task_events) = TaskManager::new()?;
+        let status_bar = StatusBar::new();
+
+        let (tx, keys) = channel::bounded(0);
+        thread::spawn(move || {
+            io::stdin()
+                .keys()
+                .map(Result::unwrap)
+                .for_each(|k| tx.send(k).unwrap());
+        });
+
+        let (tx, shell_events) = channel::bounded(0);
+        thread::spawn(move || shell::receive_events(tx));
+
+        Ok(App {
+            system_monitor,
+            file_manager,
+            task_manager,
+            status_bar,
+
+            input_focus: InputFocus::FileManager,
+            keys,
+            ticks: channel::tick(Duration::from_secs(2)),
+            watch_events,
+            task_events,
+            shell_events,
         })
     }
-}
 
-#[derive(Debug, PartialEq)]
-pub enum Action {
-    Delete(PathBuf),
-    Rename(PathBuf),
-    Filter,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Mode {
-    /// Show selected file's mode, size, etc.
-    Normal,
-
-    /// Display a short lived message.
-    Message { text: String, expire_at: Instant },
-
-    /// Ask a yes/no question.
-    Ask { prompt: String, action: Action },
-
-    /// Input some text.
-    Input {
-        prompt: String,
-        input: String,
-        offset: usize,
-        action: Action,
-    },
-
-    /// Manage tasks: kill, stop, continue..
-    Task,
-}
-
-/// App contains all the state of the application.
-pub struct App<W: Watcher = RecommendedWatcher> {
-    // file manager states
-    pub dir: PathBuf,
-    pub all_files: Vec<FileInfo>,
-    pub files: Vec<FileInfo>, // filtered
-    pub files_marked: Vec<PathBuf>,
-    pub filter: String,
-    pub show_hidden: bool,
-    pub icons: Icons,
-    pub file_list_state: ListState,
-    pub watcher: W,
-    pub shell_pid: i32,
-    pub open_methods: HashMap<String, String>,
-
-    // task manager states
-    pub tasks: Vec<Task>,
-    pub task_list_state: TaskListState,
-
-    // bottom input line states
-    pub mode: Mode,
-
-    // system monitor states
-    pub system: System,
-}
-
-impl<W: Watcher> App<W> {
-    pub fn new(watcher: W, dir: impl Into<PathBuf>) -> Result<Self> {
-        let mut app = Self {
-            dir: PathBuf::new(),
-            all_files: vec![],
-            files: vec![],
-            files_marked: vec![],
-            filter: "".to_string(),
-            show_hidden: false,
-            icons: Icons::new(),
-            file_list_state: ListState::default(),
-            watcher,
-            shell_pid: 0,
-            open_methods: get_open_methods()?,
-            tasks: vec![],
-            task_list_state: TaskListState::default(),
-            mode: Mode::Normal,
-            system: System::new_with_specifics(RefreshKind::new().with_cpu().with_memory()),
+    pub fn run(&mut self) -> Result<()> {
+        let mut terminal = {
+            let stdout = io::stdout().into_raw_mode()?;
+            let stdout = AlternateScreen::from(stdout);
+            let backend = TermionBackend::new(stdout);
+            Terminal::new(backend)?
         };
-        app.cd(dir.into())?;
 
-        Ok(app)
-    }
+        loop {
+            terminal.draw(|mut frame| {
+                // + 3: seperator, title, seperator
+                let task_height =
+                    (self.task_manager.tasks.len() as u16 + 3).min(frame.size().height / 3);
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints(
+                        [
+                            Constraint::Length(8),
+                            Constraint::Min(0),
+                            Constraint::Length(task_height),
+                            Constraint::Length(1),
+                        ]
+                        .as_ref(),
+                    )
+                    .split(frame.size());
 
-    pub fn read_dir(&self) -> io::Result<Vec<FileInfo>> {
-        let mut res = vec![];
-        for entry in fs::read_dir(&self.dir)? {
-            res.push(FileInfo::try_from(entry?)?);
-        }
-        res.sort_unstable_by(|a, b| match (a.metadata.is_dir(), b.metadata.is_dir()) {
-            (true, false) => cmp::Ordering::Less,
-            (false, true) => cmp::Ordering::Greater,
-            _ => a.name.cmp(&b.name),
-        });
-        Ok(res)
-    }
-
-    pub fn apply_filter(&mut self) {
-        let selected = self.selected().map(|f| f.name.clone());
-        self.files = self
-            .all_files
-            .iter()
-            .filter(|f| self.show_hidden || !f.name.starts_with('.'))
-            .filter(|f| f.name.to_lowercase().contains(&self.filter.to_lowercase()))
-            .cloned()
-            .collect();
-
-        // Keep selection after filter.
-        if let Some(name) = selected {
-            self.select_file(name);
-        }
-    }
-
-    pub fn select_file(&mut self, name: String) {
-        let index = self.files.iter().position(|f| f.name == name).unwrap_or(0);
-        self.file_list_state.select(Some(index));
-    }
-
-    pub fn cd(&mut self, mut dir: PathBuf) -> Result<()> {
-        if dir != self.dir {
-            if self.dir != Path::new("") {
-                self.watcher.unwatch(&self.dir)?;
-            }
-            mem::swap(&mut self.dir, &mut dir);
-            match self.read_dir() {
-                Ok(res) => {
-                    self.all_files = res;
-                    self.apply_filter();
-                    self.select_first();
-                    self.watcher.watch(&self.dir, RecursiveMode::NonRecursive)?;
+                self.system_monitor.draw(&mut frame, chunks[0]);
+                self.file_manager.draw(&mut frame, chunks[1]);
+                if !self.task_manager.tasks.is_empty() {
+                    self.task_manager.draw(&mut frame, chunks[2]);
                 }
-                Err(e) => {
-                    self.show_message(&e.to_string());
-                    self.dir = dir;
-                    self.watcher.watch(&self.dir, RecursiveMode::NonRecursive)?;
-                    return Err(e.into());
+                self.status_bar
+                    .draw(&mut self.file_manager, &mut frame, chunks[3]);
+            })?;
+
+            let bottom = terminal.size()?.bottom() - 1;
+            match &self.status_bar.mode {
+                Mode::Ask { prompt, .. } => {
+                    terminal.set_cursor(prompt.len() as u16, bottom)?;
+                    terminal.show_cursor()?;
+                }
+                Mode::Edit { prompt, cursor, .. } => {
+                    terminal.set_cursor((prompt.len() + cursor) as u16, bottom)?;
+                    terminal.show_cursor()?;
+                }
+                _ => terminal.hide_cursor()?,
+            }
+
+            select! {
+                recv(self.keys) -> key => {
+                    let key = key.unwrap();
+                    match self.status_bar.mode {
+                        Mode::Ask { .. } | Mode::Edit { .. } => self.status_bar.on_key(key, &mut self.file_manager, &mut self.task_manager),
+                        _ => match key {
+                            Key::Char('q') => {
+                                shell::deinit(self.file_manager.shell_pid)?;
+                                break;
+                            }
+                            Key::Char('\t') => match self.input_focus {
+                                InputFocus::FileManager => self.input_focus = InputFocus::TaskManager,
+                                InputFocus::TaskManager => self.input_focus = InputFocus::FileManager,
+                            }
+                            key => match self.input_focus {
+                                InputFocus::FileManager => self.file_manager.on_key(key, &mut self.status_bar)?,
+                                InputFocus::TaskManager => self.task_manager.on_key(key, &mut self.status_bar),
+                            }
+                        }
+                    }
+                }
+                recv(self.ticks) -> tick => {
+                    let tick = tick.unwrap();
+                    self.system_monitor.on_tick(tick);
+                    self.status_bar.on_tick(tick);
+                }
+                recv(self.watch_events) -> watch => self.file_manager.on_notify(watch.unwrap())?,
+                recv(self.task_events) -> task_event => self.task_manager.on_event(task_event.unwrap()),
+                recv(self.shell_events) -> shell_event => {
+                    match shell_event.unwrap() {
+                        shell::Event::Exit => break,
+                        shell::Event::Task { command, rendered } => self.task_manager.new_task(command, rendered)?,
+                        event => self.file_manager.on_shell_event(event)?,
+                    }
                 }
             }
         }
+
         Ok(())
     }
-
-    pub fn update_on_tick(&mut self) {
-        self.system.refresh_cpu();
-        self.system.refresh_memory();
-    }
-
-    pub fn show_message(&mut self, text: &str) {
-        self.mode = Mode::Message {
-            text: text.to_string(),
-            expire_at: Instant::now() + Duration::from_secs(4),
-        };
-    }
-
-    pub fn selected(&self) -> Option<&FileInfo> {
-        if self.files.is_empty() {
-            None
-        } else {
-            let idx = self.file_list_state.selected().unwrap_or(0);
-            Some(&self.files[idx])
-        }
-    }
-
-    pub fn select_first(&mut self) {
-        let index = if self.files.is_empty() { None } else { Some(0) };
-        self.file_list_state.select(index);
-    }
-
-    pub fn select_last(&mut self) {
-        let index = match self.files.len() {
-            0 => None,
-            len => Some(len - 1),
-        };
-        self.file_list_state.select(index);
-    }
-
-    pub fn select_next(&mut self) {
-        let index = self
-            .file_list_state
-            .selected()
-            .map(|i| (i + 1) % self.files.len());
-        self.file_list_state.select(index);
-    }
-
-    pub fn select_prev(&mut self) {
-        let index = match self.file_list_state.selected() {
-            None => None,
-            Some(0) if self.files.is_empty() => None,
-            Some(0) => Some(self.files.len() - 1),
-            Some(i) => Some(i - 1),
-        };
-        self.file_list_state.select(index);
-    }
-}
-
-fn get_open_methods() -> Result<HashMap<String, String>> {
-    let config = &env::var("HOME")?;
-    let config = Path::new(&config);
-    let config = config.join(".config/scd/open.yml");
-    let mut res = HashMap::new();
-    if let Ok(buf) = fs::read_to_string(config) {
-        let raw: HashMap<String, String> = serde_yaml::from_str(&buf)?;
-        for (exts, cmd) in raw {
-            for ext in exts.split(',').map(str::trim) {
-                res.insert(ext.to_string(), cmd.clone());
-            }
-        }
-    }
-    Ok(res)
 }

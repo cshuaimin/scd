@@ -2,7 +2,7 @@ use std::io;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use crossbeam_channel::{self as channel, select, Receiver};
 use notify::RecommendedWatcher;
 use termion::{event::Key, input::TermRead, raw::IntoRawMode, screen::AlternateScreen};
@@ -116,11 +116,21 @@ impl App {
                 _ => terminal.hide_cursor()?,
             }
 
+            macro_rules! catch_error {
+                ($r:expr) => {
+                    if let Err(e) = $r {
+                        self.status_bar.show_message(e.to_string());
+                    }
+                };
+            }
+
             select! {
                 recv(self.keys) -> key => {
                     let key = key.unwrap();
                     match self.status_bar.mode {
-                        Mode::Ask { .. } | Mode::Edit { .. } => self.status_bar.on_key(key, &mut self.file_manager, &mut self.task_manager),
+                        Mode::Ask { .. } | Mode::Edit { .. } => {
+                            catch_error!(self.status_bar.on_key(key, &mut self.file_manager, &mut self.task_manager));
+                        }
                         _ => match key {
                             Key::Char('q') => {
                                 shell::deinit(self.file_manager.shell_pid)?;
@@ -130,10 +140,10 @@ impl App {
                                 InputFocus::FileManager => self.input_focus = InputFocus::TaskManager,
                                 InputFocus::TaskManager => self.input_focus = InputFocus::FileManager,
                             }
-                            key => match self.input_focus {
-                                InputFocus::FileManager => self.file_manager.on_key(key, &mut self.status_bar)?,
+                            key => catch_error!(match self.input_focus {
+                                InputFocus::FileManager => self.file_manager.on_key(key, &mut self.status_bar),
                                 InputFocus::TaskManager => self.task_manager.on_key(key, &mut self.status_bar),
-                            }
+                            })
                         }
                     }
                 }
@@ -142,18 +152,78 @@ impl App {
                     self.system_monitor.on_tick(tick);
                     self.status_bar.on_tick(tick);
                 }
-                recv(self.watch_events) -> watch => self.file_manager.on_notify(watch.unwrap())?,
+                recv(self.watch_events) -> watch => catch_error!(self.file_manager.on_notify(watch.unwrap())),
                 recv(self.task_events) -> task_event => self.task_manager.on_event(task_event.unwrap()),
                 recv(self.shell_events) -> shell_event => {
-                    match shell_event.unwrap() {
+                    catch_error!(match shell_event.unwrap() {
                         shell::Event::Exit => break,
-                        shell::Event::Task { command, rendered } => self.task_manager.new_task(command, rendered)?,
-                        event => self.file_manager.on_shell_event(event)?,
-                    }
+                        shell::Event::Task { command, rendered } => self.task_manager.new_task(command, rendered),
+                        event => self.file_manager.on_shell_event(event),
+                    })
                 }
             }
         }
 
+        Ok(())
+    }
+}
+
+pub trait ListExt {
+    type Item;
+
+    fn get_index(&self) -> Option<usize>;
+    fn get_list(&self) -> &[Self::Item];
+    fn select(&mut self, index: Option<usize>);
+
+    fn selected(&self) -> Option<&Self::Item> {
+        if self.get_list().is_empty() {
+            None
+        } else {
+            let idx = self.get_index().unwrap_or(0);
+            Some(&self.get_list()[idx])
+        }
+    }
+
+    fn select_first(&mut self) {
+        let index = if self.get_list().is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+        self.select(index);
+    }
+
+    fn select_last(&mut self) {
+        let index = match self.get_list().len() {
+            0 => None,
+            len => Some(len - 1),
+        };
+        self.select(index);
+    }
+
+    fn select_next(&mut self) {
+        let index = self.get_index().map(|i| (i + 1) % self.get_list().len());
+        self.select(index);
+    }
+
+    fn select_prev(&mut self) {
+        let index = match self.get_index() {
+            None => None,
+            Some(0) if self.get_list().is_empty() => None,
+            Some(0) => Some(self.get_list().len() - 1),
+            Some(i) => Some(i - 1),
+        };
+        self.select(index);
+    }
+
+    fn on_list_key(&mut self, key: Key) -> Result<()> {
+        match key {
+            Key::Char('j') | Key::Ctrl('n') | Key::Down => self.select_next(),
+            Key::Char('k') | Key::Ctrl('p') | Key::Up => self.select_prev(),
+            Key::Char('g') | Key::Home => self.select_first(),
+            Key::Char('G') | Key::End => self.select_last(),
+            uk => bail!("Unknown key: {:?}", uk),
+        }
         Ok(())
     }
 }

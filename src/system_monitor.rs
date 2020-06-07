@@ -1,15 +1,13 @@
 use std::fmt::Write;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use sysinfo::{ProcessorExt, RefreshKind, System, SystemExt};
-use tui::{
-    backend::Backend,
-    buffer::Buffer,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    widgets::{Paragraph, Text, Widget},
-    Frame,
-};
+use tui::backend::Backend;
+use tui::buffer::Buffer;
+use tui::layout::{Constraint, Direction, Layout, Rect};
+use tui::style::{Color, Modifier, Style};
+use tui::widgets::{Paragraph, Text, Widget};
+use tui::Frame;
 
 fn format_time(mut secs: u64) -> String {
     const UNITS: &[(u64, &str)] = &[
@@ -88,10 +86,6 @@ impl SystemMonitor {
     pub fn on_tick(&mut self, _tick: Instant) {
         self.system.refresh_cpu();
         self.system.refresh_memory();
-    }
-
-    pub fn on_key(&mut self, key: termion::event::Key) {
-        todo!()
     }
 
     pub fn draw(&self, frame: &mut Frame<impl Backend>, area: Rect) {

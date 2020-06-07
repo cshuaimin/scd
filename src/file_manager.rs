@@ -20,6 +20,7 @@ use tui::style::{Color, Modifier, Style};
 use tui::widgets::{List, ListState, Paragraph, Text};
 use tui::Frame;
 
+use crate::app::ListExt;
 use crate::shell;
 use crate::status_bar::StatusBar;
 use nix::unistd::Pid;
@@ -148,52 +149,14 @@ where
         self.list_state.select(Some(index));
     }
 
-    pub fn selected(&self) -> Option<&FileInfo> {
-        if self.files.is_empty() {
-            None
-        } else {
-            let idx = self.list_state.selected().unwrap_or(0);
-            Some(&self.files[idx])
-        }
-    }
-
-    pub fn select_first(&mut self) {
-        let index = if self.files.is_empty() { None } else { Some(0) };
-        self.list_state.select(index);
-    }
-
-    pub fn select_last(&mut self) {
-        let index = match self.files.len() {
-            0 => None,
-            len => Some(len - 1),
-        };
-        self.list_state.select(index);
-    }
-
-    pub fn select_next(&mut self) {
-        let index = self
-            .list_state
-            .selected()
-            .map(|i| (i + 1) % self.files.len());
-        self.list_state.select(index);
-    }
-
-    pub fn select_prev(&mut self) {
-        let index = match self.list_state.selected() {
-            None => None,
-            Some(0) if self.files.is_empty() => None,
-            Some(0) => Some(self.files.len() - 1),
-            Some(i) => Some(i - 1),
-        };
-        self.list_state.select(index);
-    }
-
     pub fn on_notify(&mut self, event: notify::Event) -> io::Result<()> {
         match event.kind {
-            EventKind::Create(_) | EventKind::Remove(_) => self.read_dir().map(|res| {
-                self.all_files = res;
-                self.apply_filter();
-            }),
+            EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(_) => {
+                self.read_dir().map(|res| {
+                    self.all_files = res;
+                    self.apply_filter();
+                })
+            }
             _ => Ok(()),
         }
     }
@@ -209,10 +172,6 @@ where
 
     pub fn on_key(&mut self, key: Key, status_bar: &mut StatusBar) -> Result<()> {
         match key {
-            Key::Char('j') | Key::Ctrl('n') | Key::Down => self.select_next(),
-            Key::Char('k') | Key::Ctrl('p') | Key::Up => self.select_prev(),
-            Key::Char('g') | Key::Home => self.select_first(),
-            Key::Char('G') | Key::End => self.select_last(),
             Key::Char('l') | Key::Char('\n') => {
                 if let Some(file) = self.selected() {
                     if file.metadata.is_dir() {
@@ -288,9 +247,7 @@ where
                     let file = selected.path.to_str().unwrap().to_owned();
                     status_bar.ask(
                         format!("Delete {} {}? [y/N]", tp, selected.name),
-                        move |this, _| {
-                            shell::run(this.shell_pid, "rm -r", &[&file], true).unwrap()
-                        },
+                        move |this, _| shell::run(this.shell_pid, "rm -r", &[&file], true),
                     );
                 }
             }
@@ -300,7 +257,7 @@ where
                     status_bar.edit(
                         "Rename: ",
                         &file.name,
-                        |_, _, _| {},
+                        |_, _, _| Ok(()),
                         move |new_name, this, _| {
                             shell::run(
                                 this.shell_pid,
@@ -311,7 +268,6 @@ where
                                 ],
                                 true,
                             )
-                            .unwrap()
                         },
                     );
                 }
@@ -323,14 +279,16 @@ where
                     |filter, this, _| {
                         this.filter = filter.to_owned();
                         this.apply_filter();
+                        Ok(())
                     },
                     |_, this, _| {
                         this.filter.clear();
                         this.apply_filter();
+                        Ok(())
                     },
                 );
             }
-            uk => status_bar.show_message(&format!("Unknown key: {:?}", uk)),
+            key => self.on_list_key(key)?,
         }
         Ok(())
     }
@@ -383,15 +341,6 @@ where
     }
 }
 
-impl<W> Drop for FileManager<W>
-where
-    W: Watcher,
-{
-    fn drop(&mut self) {
-        // shell::deinit(self.shell_pid).unwrap();
-    }
-}
-
 fn load_open_methods() -> Result<HashMap<String, String>> {
     let config = &env::var("HOME")?;
     let config = Path::new(&config);
@@ -413,4 +362,23 @@ fn load_open_methods() -> Result<HashMap<String, String>> {
         }
     }
     Ok(res)
+}
+
+impl<W> ListExt for FileManager<W>
+where
+    W: Watcher,
+{
+    type Item = FileInfo;
+
+    fn get_index(&self) -> Option<usize> {
+        self.list_state.selected()
+    }
+
+    fn get_list(&self) -> &[Self::Item] {
+        &self.files
+    }
+
+    fn select(&mut self, index: Option<usize>) {
+        self.list_state.select(index)
+    }
 }

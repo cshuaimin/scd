@@ -73,7 +73,7 @@ pub fn run(pid: Pid, cmd: &str, args: &[impl AsRef<str>], echo: bool) -> Result<
     };
 
     kill(pid, Signal::SIGUSR1).with_context(|| "Failed to notify the shell")?;
-    let mut fifo = OpenOptions::new().write(true).open(CMDS_TO_RUN)?;
+    let fifo = OpenOptions::new().write(true).open(CMDS_TO_RUN)?;
     write(fifo, cmd)
 }
 /// Receive a shell command to run.

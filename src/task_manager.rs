@@ -16,12 +16,13 @@ use termion::{color, cursor};
 use tui::{backend::Backend, layout::Rect, Frame};
 use unicode_width::UnicodeWidthStr;
 
+use crate::app::ListExt;
 use crate::status_bar::StatusBar;
 
 pub enum Event {
-    Stdout { pid: u32, line: String },
-    Stderr { pid: u32, line: String },
-    Exit { pid: u32, exit_status: ExitStatus },
+    Stdout { pid: Pid, line: String },
+    Stderr { pid: Pid, line: String },
+    Exit { pid: Pid, exit_status: ExitStatus },
 }
 
 pub enum Status {
@@ -31,7 +32,7 @@ pub enum Status {
 }
 
 pub struct Task {
-    pub pid: u32,
+    pub pid: Pid,
     pub command: String,
     pub rendered: String,
     pub status: Status,
@@ -40,15 +41,23 @@ pub struct Task {
 
 impl Task {
     pub fn new(command: String, rendered: String, tx: Sender<Event>) -> Result<Self> {
-        let shell = env::var("SHELL").unwrap_or("sh".to_string());
-        let mut child = Command::new(shell)
-            .args(&["-c", &command])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+        let mut child = {
+            let shell = env::var("SHELL").unwrap_or("sh".to_string());
+            let mut builder = Command::new(&shell);
+            builder.arg("-c");
+            if shell.ends_with("fish") {
+                builder.arg(format!("exec {}", command));
+            } else {
+                builder.arg(&command);
+            }
+            builder
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?
+        };
 
-        let pid = child.id();
+        let pid = Pid::from_raw(child.id() as _);
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         let stderr = BufReader::new(child.stderr.take().unwrap());
@@ -83,7 +92,7 @@ impl Task {
             pid,
             command,
             rendered,
-            status: Status::Running("\u{f110}".to_string()),
+            status: Status::Running("\u{f110} ".to_string()),
             stdin,
         })
     }
@@ -114,7 +123,7 @@ impl TaskManager {
                 let status = PARSERS
                     .get(name)
                     .and_then(|parser| parser.parse(line))
-                    .unwrap_or("\u{f110}".to_string());
+                    .unwrap_or("\u{f110} ".to_string());
                 task.status = Status::Running(status);
             }
             Event::Exit { pid, exit_status } => {
@@ -138,37 +147,57 @@ impl TaskManager {
     pub fn new_task(&mut self, command: String, rendered: String) -> Result<()> {
         let task = Task::new(command, rendered, self.tx.clone())?;
         self.tasks.push(task);
+        self.select_first();
         Ok(())
     }
 
-    pub fn on_key(&mut self, key: Key, status_bar: &mut StatusBar) {
+    pub fn on_key(&mut self, key: Key, status_bar: &mut StatusBar) -> Result<()> {
         match key {
-            Key::Char('k') => {
-                if let Some(idx) = self.list_state.selected {
-                    let pid = Pid::from_raw(self.tasks[idx].pid as i32);
+            Key::Char('c') => {
+                self.tasks
+                    .retain(|t| matches!(t.status, Status::Running(_)));
+                self.select_first();
+            }
+            Key::Char('t') => {
+                if let Some(task) = self.selected() {
+                    let pid = task.pid;
                     status_bar.ask(
-                        format!("Kill task {}?", self.tasks[idx].command),
-                        move |_, _| {
-                            kill(pid, Signal::SIGTERM).unwrap();
-                        },
+                        format!("Terminate '{}' with SIGTERM?", task.command),
+                        move |_, _| Ok(kill(pid, Signal::SIGTERM)?),
                     );
                 }
             }
-            _ => {}
+            Key::Char('9') => {
+                if let Some(task) = self.selected() {
+                    let pid = task.pid;
+                    status_bar.ask(
+                        format!("Kill '{}' with SIGKILL?", task.command),
+                        move |_, _| Ok(kill(pid, Signal::SIGKILL)?),
+                    );
+                }
+            }
+            Key::Char('z') => {
+                if let Some(idx) = self.list_state.selected {
+                    let task = &mut self.tasks[idx];
+                    kill(task.pid, Signal::SIGINT)?;
+                    task.status = Status::Stopped;
+                }
+            }
+            key => self.on_list_key(key)?,
         }
+        Ok(())
     }
 
     pub fn draw(&mut self, _frame: &mut Frame<impl Backend>, area: Rect) {
         let height = area.height as usize;
-        let state = &mut self.list_state;
         // Make sure the list show the selected item
-        state.offset = if let Some(selected) = state.selected {
-            if selected >= height + state.offset - 1 {
+        self.list_state.offset = if let Some(selected) = self.list_state.selected {
+            if selected >= height + self.list_state.offset - 1 {
                 selected + 1 - height
-            } else if selected < state.offset {
+            } else if selected < self.list_state.offset {
                 selected
             } else {
-                state.offset
+                self.list_state.offset
             }
         } else {
             0
@@ -189,9 +218,13 @@ impl TaskManager {
 
         macro_rules! draw {
             ($i:expr, $left:expr, $right_color:expr, $right:expr) => {{
+                if matches!(self.list_state.selected, Some(s) if s + 1 == $i) {
+                    write!(stdout, "{}> {}", color::Fg(color::Blue), color::Fg(color::Reset)).unwrap();
+                }
+
                 // `Goto` is (1,1)-based
                 let y = area.top() + $i as u16 + 1;
-                let left_pos = cursor::Goto(area.left() + 1, y);
+                let left_pos = cursor::Goto(area.left() + 2 + 1, y);
                 let right_pos = cursor::Goto(area.width - max_status_width, y);
                 write!(stdout, "{}{}", left_pos, " ".repeat(area.width as usize)).unwrap();
                 write!(stdout, "{}{}", left_pos, $left).unwrap();
@@ -215,18 +248,18 @@ impl TaskManager {
             .map(|task| {
                 let (status_color, status) = match &task.status {
                     Status::Running(s) => (color::White.fg_str(), s.as_str()),
-                    Status::Stopped => (color::LightYellow.fg_str(), "\u{f04c}"),
+                    Status::Stopped => (color::LightYellow.fg_str(), "\u{f04c} "),
                     Status::Exited(s) => {
                         if s.success() {
-                            (color::LightCyan.fg_str(), "✓")
+                            (color::LightCyan.fg_str(), "✓ ")
                         } else {
-                            (color::LightRed.fg_str(), "✗")
+                            (color::LightRed.fg_str(), "✗ ")
                         }
                     }
                 };
                 (task.rendered.as_str(), status_color, status)
             })
-            .skip(state.offset)
+            .skip(self.list_state.offset)
             .take(height - 1)
             .enumerate()
             .for_each(|(i, (command, status_color, status))| {
@@ -255,6 +288,22 @@ impl Default for TaskListState {
             offset: 0,
             selected: None,
         }
+    }
+}
+
+impl ListExt for TaskManager {
+    type Item = Task;
+
+    fn get_index(&self) -> Option<usize> {
+        self.list_state.selected
+    }
+
+    fn get_list(&self) -> &[Self::Item] {
+        &self.tasks
+    }
+
+    fn select(&mut self, index: Option<usize>) {
+        self.list_state.selected = index;
     }
 }
 

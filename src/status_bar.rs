@@ -1,6 +1,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
+use anyhow::Result;
 use notify::Watcher;
 use strmode::strmode;
 use termion::event::Key;
@@ -10,6 +11,7 @@ use tui::style::{Color, Style};
 use tui::widgets::{Paragraph, Text};
 use tui::Frame;
 
+use crate::app::ListExt;
 use crate::file_manager::FileManager;
 use crate::task_manager::TaskManager;
 
@@ -23,7 +25,7 @@ pub enum Mode {
     /// Ask a yes/no question.
     Ask {
         prompt: String,
-        on_yes: Box<dyn Fn(&mut FileManager, &mut TaskManager)>,
+        on_yes: Box<dyn Fn(&mut FileManager, &mut TaskManager) -> Result<()>>,
     },
 
     /// Edit some text.
@@ -31,8 +33,8 @@ pub enum Mode {
         prompt: String,
         text: String,
         cursor: usize,
-        on_change: Box<dyn FnMut(&str, &mut FileManager, &mut TaskManager)>,
-        on_enter: Box<dyn Fn(&str, &mut FileManager, &mut TaskManager)>,
+        on_change: Box<dyn Fn(&str, &mut FileManager, &mut TaskManager) -> Result<()>>,
+        on_enter: Box<dyn Fn(&str, &mut FileManager, &mut TaskManager) -> Result<()>>,
     },
 }
 
@@ -55,7 +57,7 @@ impl StatusBar {
     pub fn ask(
         &mut self,
         prompt: impl Into<String>,
-        on_yes: impl Fn(&mut FileManager, &mut TaskManager) + 'static,
+        on_yes: impl Fn(&mut FileManager, &mut TaskManager) -> Result<()> + 'static,
     ) {
         self.mode = Mode::Ask {
             prompt: prompt.into(),
@@ -67,8 +69,8 @@ impl StatusBar {
         &mut self,
         prompt: impl Into<String>,
         text: impl Into<String>,
-        on_change: impl FnMut(&str, &mut FileManager, &mut TaskManager) + 'static,
-        on_enter: impl Fn(&str, &mut FileManager, &mut TaskManager) + 'static,
+        on_change: impl Fn(&str, &mut FileManager, &mut TaskManager) -> Result<()> + 'static,
+        on_enter: impl Fn(&str, &mut FileManager, &mut TaskManager) -> Result<()> + 'static,
     ) {
         let text = text.into();
         let cursor = text.len();
@@ -94,13 +96,13 @@ impl StatusBar {
         key: Key,
         file_manager: &mut FileManager,
         task_manager: &mut TaskManager,
-    ) {
+    ) -> Result<()> {
         match &mut self.mode {
             Mode::Normal => panic!(),
             Mode::Message { .. } => self.mode = Mode::Normal,
             Mode::Ask { on_yes, .. } => {
                 if key == Key::Char('y') {
-                    on_yes(file_manager, task_manager);
+                    on_yes(file_manager, task_manager)?;
                 }
                 self.mode = Mode::Normal;
             }
@@ -112,7 +114,7 @@ impl StatusBar {
                 ..
             } => match key {
                 Key::Char('\n') => {
-                    on_enter(text, file_manager, task_manager);
+                    on_enter(text, file_manager, task_manager)?;
                     self.mode = Mode::Normal;
                 }
                 Key::Esc | Key::Ctrl('[') => self.mode = Mode::Normal,
@@ -134,29 +136,30 @@ impl StatusBar {
                     if *cursor > 0 {
                         text.remove(*cursor - 1);
                         *cursor -= 1;
-                        on_change(text, file_manager, task_manager);
+                        on_change(text, file_manager, task_manager)?;
                     }
                 }
                 Key::Delete | Key::Ctrl('d') => {
                     if *cursor > 0 {
                         text.remove(*cursor);
-                        on_change(text, file_manager, task_manager);
+                        on_change(text, file_manager, task_manager)?;
                     }
                 }
                 Key::Ctrl('u') => {
                     text.clear();
                     *cursor = 0;
-                    on_change(text, file_manager, task_manager);
+                    on_change(text, file_manager, task_manager)?;
                 }
 
                 Key::Char(ch) => {
                     text.insert(*cursor, ch);
                     *cursor += 1;
-                    on_change(text, file_manager, task_manager);
+                    on_change(text, file_manager, task_manager)?;
                 }
                 _ => {}
             },
         }
+        Ok(())
     }
 
     pub fn draw(
@@ -183,12 +186,8 @@ impl StatusBar {
                 }
 
                 let mut text = String::new();
-                if !file_manager.filter.is_empty() {
-                    text.push_str("F:");
-                    text.push_str(&file_manager.filter);
-                }
                 if !file_manager.files_marked.is_empty() {
-                    text.push_str(" M:");
+                    text.push_str("M:");
                     text.push_str(&file_manager.files_marked.len().to_string());
                 }
                 text.push_str(&format!(

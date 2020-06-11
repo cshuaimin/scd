@@ -140,7 +140,7 @@ impl StatusBar {
                     }
                 }
                 Key::Delete | Key::Ctrl('d') => {
-                    if *cursor > 0 {
+                    if *cursor < text.len() {
                         text.remove(*cursor);
                         on_change(text, file_manager, task_manager)?;
                     }

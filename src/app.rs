@@ -133,7 +133,9 @@ impl App {
                         }
                         _ => match key {
                             Key::Char('q') => {
-                                shell::deinit(self.file_manager.shell_pid)?;
+                                if self.file_manager.shell_pid.as_raw() > 0 {
+                                    shell::deinit(self.file_manager.shell_pid)?;
+                                }
                                 break;
                             }
                             Key::Char('\t') => match self.input_focus {

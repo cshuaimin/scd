@@ -117,7 +117,10 @@ impl StatusBar {
                     on_enter(text, file_manager, task_manager)?;
                     self.mode = Mode::Normal;
                 }
-                Key::Esc | Key::Ctrl('[') => self.mode = Mode::Normal,
+                Key::Esc | Key::Ctrl('[') => {
+                    on_change("", file_manager, task_manager)?;
+                    self.mode = Mode::Normal;
+                }
 
                 Key::Home | Key::Ctrl('a') => *cursor = 0,
                 Key::End | Key::Ctrl('e') => *cursor = text.len(),

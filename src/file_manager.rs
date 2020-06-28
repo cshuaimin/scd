@@ -221,8 +221,7 @@ where
                 if self.files_marked.is_empty() {
                     status_bar.show_message("No files marked");
                 } else {
-                    let mut files = vec![];
-                    mem::swap(&mut self.files_marked, &mut files);
+                    let files = mem::take(&mut self.files_marked);
                     let files: Vec<&str> = files.iter().map(|f| f.to_str().unwrap()).collect();
                     shell::run(self.shell_pid, "cp -r {} .", &files, true)?;
                 }
@@ -231,8 +230,7 @@ where
                 if self.files_marked.is_empty() {
                     status_bar.show_message("No files marked");
                 } else {
-                    let mut files = vec![];
-                    mem::swap(&mut self.files_marked, &mut files);
+                    let files = mem::take(&mut self.files_marked);
                     let files: Vec<&str> = files.iter().map(|f| f.to_str().unwrap()).collect();
                     shell::run(self.shell_pid, "mv {} .", &files, true)?;
                 }

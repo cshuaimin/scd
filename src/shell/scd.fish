@@ -44,5 +44,6 @@ scd send-pid $fish_pid
 scd_cd
 
 function scd_deinit
-    functions --erase scd_eval scd_run_silently scd_run_with_echo scd_cd scd_exit scd_deinit
+    bind --erase \r \cj
+    functions --erase scd_eval scd_run_silently scd_run_with_echo scd_cd scd_exit scd_send_task scd_enter_key scd_deinit
 end

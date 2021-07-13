@@ -108,7 +108,7 @@ impl SystemMonitor {
             .modifier(Modifier::BOLD);
 
         let avg = self.system.get_load_average();
-        let load_average = format!("{} {} {}", avg.one, avg.five, avg.fifteen);
+        let load_average = format!("{:.2} {:.2} {:.2}", avg.one, avg.five, avg.fifteen);
         frame.render_widget(
             Paragraph::new([Text::raw("LA "), Text::styled(load_average, value_style)].iter()),
             chunks[0],

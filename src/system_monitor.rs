@@ -56,12 +56,13 @@ impl<'a> Widget for Meter<'a> {
         for x in area.left()..sep {
             buf.get_mut(x, area.top() + 1)
                 .set_fg(self.style.fg)
-                .set_symbol("■");
+                .set_symbol("▆");
         }
         for x in sep..end {
             buf.get_mut(x, area.top() + 1)
                 .set_fg(Color::DarkGray)
-                .set_symbol("■");
+                .set_symbol("▆");
+            
         }
         buf.set_string(
             end + 1,
